@@ -1,0 +1,372 @@
+import numpy as np
+from scipy.signal import butter, filtfilt, detrend, medfilt, savgol_filter, find_peaks
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 0. CONSTANTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+LOW_HZ = 0.7  # 42 BPM
+HIGH_HZ = 4.0  # 240 BPM
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. SHARED UTILITIES
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def bandpass_filter(signal_1d, fps, low_hz=LOW_HZ, high_hz=HIGH_HZ, order=4):
+    """Apply Butterworth bandpass filter to a 1D signal."""
+    nyquist = fps / 2.0
+    low = max(low_hz / nyquist, 1e-6)
+    high = min(high_hz / nyquist, 0.99)
+
+    b, a = butter(order, [low, high], btype="band")
+    return filtfilt(b, a, signal_1d)
+
+
+def bandpass_rgb(rgb, fps, low_hz=LOW_HZ, high_hz=HIGH_HZ, order=4):
+    """Apply bandpass filter to all 3 RGB channels independently."""
+    return np.stack(
+        [bandpass_filter(rgb[:, i], fps, low_hz, high_hz, order) for i in range(3)],
+        axis=1,
+    )
+
+
+def hr_band_power(sig, fps):
+    """Compute sum of squared FFT magnitudes in the heart rate band."""
+    fft = np.abs(np.fft.rfft(sig))
+    freqs = np.fft.rfftfreq(len(sig), d=1.0 / fps)
+    mask = (freqs >= LOW_HZ) & (freqs <= HIGH_HZ)
+    return np.sum(fft[mask] ** 2) if mask.any() else 0.0
+
+
+def spectral_peak_snr(sig, fps):
+    """Ratio of peak FFT magnitude² to mean magnitude² in the HR band.
+    Higher value = cleaner, sharper pulse peak."""
+    fft = np.abs(np.fft.rfft(sig))
+    freqs = np.fft.rfftfreq(len(sig), d=1.0 / fps)
+    mask = (freqs >= LOW_HZ) & (freqs <= HIGH_HZ)
+    if not mask.any():
+        return 0.0
+    hr_fft = fft[mask]
+    peak_power = np.max(hr_fft) ** 2
+    avg_power = np.mean(hr_fft ** 2) + 1e-10
+    return peak_power / avg_power
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. PREPROCESSING
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+
+
+def detrend_rgb(rgb):
+    """Light detrend for POS: removes linear drift but preserves channel means
+    so that POS's internal per-window normalization (segment / mean_c) works correctly."""
+    result = np.zeros_like(rgb, dtype=np.float64)
+    for i in range(3):
+        channel = rgb[:, i].astype(np.float64)
+        ch_mean = np.mean(channel)
+        result[:, i] = detrend(channel, type="linear") + ch_mean
+    return result
+
+
+def detect_motion_frames(rgb_raw, threshold=2.5):
+    """Flags frames with excessive inter-frame RGB jumps."""
+    diff = np.abs(np.diff(rgb_raw, axis=0))
+    frame_motion = diff.mean(axis=1)
+    motion_threshold = np.mean(frame_motion) + threshold * np.std(frame_motion)
+    bad_frames = np.concatenate([[False], frame_motion > motion_threshold])
+    return bad_frames
+
+
+def remove_motion_artifacts(pulse, fps, method="savgol"):
+    """Gentle smoothing to reduce sharp motion spikes while preserving peak shape."""
+    cleaned = pulse.copy()
+    if method in ("median", "both"):
+        kernel = max(3, int(fps * 0.067) | 1)
+        cleaned = medfilt(cleaned, kernel_size=kernel)
+    if method in ("savgol", "both"):
+        window = max(5, int(fps * 0.133) | 1)
+        poly = min(3, window - 1)
+        if window > poly:
+            cleaned = savgol_filter(cleaned, window_length=window, polyorder=poly)
+    return cleaned
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. EXTRACTION ALGORITHMS
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def pos_algorithm(rgb, fps, window_sec=6.0):
+    """Plane-Orthogonal-to-Skin (POS) rPPG extraction (Wang et al., 2017)."""
+    N = len(rgb)
+    window = int(window_sec * fps)
+    pulse = np.zeros(N)
+    weights = np.zeros(N)
+
+    for start in range(0, N - window, window // 2):
+        end = start + window
+        segment = rgb[start:end].copy()
+        mean_c = np.mean(segment, axis=0)
+        if np.any(mean_c == 0):
+            continue
+
+        Cn = segment / (mean_c + 1e-8)
+        S1 = Cn[:, 1] - Cn[:, 2]
+        S2 = Cn[:, 1] + Cn[:, 2] - 2 * Cn[:, 0]
+
+        std_s1, std_s2 = np.std(S1), np.std(S2)
+        if std_s2 < 1e-8:
+            continue
+
+        H = S1 + (std_s1 / std_s2) * S2
+        pulse[start:end] += H
+        weights[start:end] += 1
+
+    pulse /= weights + 1e-8
+    return bandpass_filter(pulse, fps)
+
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. POST-PROCESSING & VALIDATION
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def extract_pulse_waveform(pulse, fps):
+    """Extract clinical-grade features: peaks, IBI, and normalized waveform."""
+    p_min, p_max = pulse.min(), pulse.max()
+    if p_max - p_min < 1e-8:
+        return np.array([]), np.array([]), pulse
+    clean_pulse = 2 * (pulse - p_min) / (p_max - p_min) - 1
+
+    min_distance = int(fps * 0.4)
+    duration_sec = len(clean_pulse) / fps
+    min_expected_peaks = max(3, int(duration_sec * 0.6))
+
+    threshold_levels = [
+        {"height": 0.20, "prominence": 0.20},
+        {"height": 0.10, "prominence": 0.12},
+        {"height": 0.05, "prominence": 0.06},
+    ]
+
+    peaks_idx, ibi_ms = np.array([]), np.array([])
+    for params in threshold_levels:
+        peaks_idx, _ = find_peaks(clean_pulse, distance=min_distance, **params)
+        if len(peaks_idx) >= 2:
+            ibi_ms = (np.diff(peaks_idx) / fps) * 1000
+            ibi_ms = ibi_ms[(ibi_ms >= 300) & (ibi_ms <= 1500)]
+        if len(peaks_idx) >= min_expected_peaks and len(ibi_ms) >= 2:
+            break
+
+    return peaks_idx, ibi_ms, clean_pulse
+
+
+def compute_confidence_score(pulse, fps, ibi_ms):
+    """
+    Computes a 0–1 confidence score based on IBI regularity, SNR,
+    peak density, and data duration. Returns (score, details, is_reliable).
+    """
+    details = {}
+    duration = len(pulse) / fps
+
+    # 1. IBI Regularity (0.30)
+    if len(ibi_ms) >= 3:
+        cv = np.std(ibi_ms) / (np.mean(ibi_ms) + 1e-8)
+        reg_score = float(np.clip(1.0 - (cv / 0.40), 0.0, 1.0))
+    elif len(ibi_ms) >= 1:
+        reg_score = (
+            0.4
+            if len(ibi_ms) == 1
+            else float(
+                np.clip(1.0 - (np.std(ibi_ms) / np.mean(ibi_ms) / 0.40), 0.0, 1.0)
+            )
+            * 0.7
+        )
+    else:
+        reg_score = 0.0
+
+    # 2. SNR (0.35)
+    fft = np.abs(np.fft.rfft(pulse))
+    freqs = np.fft.rfftfreq(len(pulse), d=1.0 / fps)
+    hr_mask = (freqs >= LOW_HZ) & (freqs <= HIGH_HZ)
+    snr_score = 0.0
+    if hr_mask.any() and fft[hr_mask].sum() > 0:
+        hr_fft, hr_freqs = fft[hr_mask], freqs[hr_mask]
+        p_idx = np.argmax(hr_fft)
+        peak_pwr = hr_fft[p_idx] ** 2
+        peak_f = hr_freqs[p_idx]
+        noise_mask = (np.abs(hr_freqs - peak_f) > 0.15) & (
+            np.abs(hr_freqs - 2 * peak_f) > 0.15
+        )
+        if noise_mask.any():
+            snr_score = float(
+                np.clip(
+                    (peak_pwr / (np.mean(hr_fft[noise_mask] ** 2) + 1e-10)) / 12.0,
+                    0.0,
+                    1.0,
+                )
+            )
+        details["dominant_bpm"] = float(peak_f * 60)
+
+    # 3. Peak Density (0.15)
+    if len(ibi_ms) >= 1:
+        bpm = 60000.0 / np.mean(ibi_ms)
+        density_score = 1.0 if 45 <= bpm <= 160 else (0.6 if 35 <= bpm <= 200 else 0.2)
+    else:
+        density_score = 0.1 if 40 <= details.get("dominant_bpm", 0) <= 180 else 0.0
+
+    # 4. Data Duration (0.20)
+    data_score = float(np.clip(duration / 15.0, 0.0, 1.0))
+
+    scores = [reg_score, snr_score, density_score, data_score]
+    final_score = float(np.dot(scores, [0.30, 0.35, 0.15, 0.20]))
+    is_reliable = final_score >= 0.45
+
+    details.update(
+        {
+            "final_score": final_score,
+            "is_reliable": is_reliable,
+            "ibi_regularity": reg_score,
+            "snr": snr_score,
+            "density": density_score,
+            "duration": data_score,
+        }
+    )
+    return final_score, details, is_reliable
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. HRV & STRESS ANALYSIS
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def compute_hrv_features(ibi_ms):
+    """
+    Compute Time-Domain and Frequency-Domain HRV features and provide
+    a basic stress classification from Inter-Beat Intervals (IBI).
+    """
+    if len(ibi_ms) < 2:
+        return {
+            "rmssd_ms": 0.0,
+            "sdnn_ms": 0.0,
+            "lf_hf_ratio": 0.0,
+            "stress_index": 0.0,
+            "stress_level": "Unknown",
+        }
+
+    ibi_sec = ibi_ms / 1000.0
+
+    # Time-Domain
+    diff = np.diff(ibi_sec)
+    rmssd = np.sqrt(np.mean(diff**2)) if len(diff) > 0 else 0.0
+    sdnn = np.std(ibi_sec)
+
+    # Frequency-Domain
+    try:
+        from scipy.signal import welch
+
+        fs_interp = 1.0 / np.mean(ibi_sec)
+        nperseg = min(len(ibi_sec), 256)
+        if nperseg > 0:
+            freqs, psd = welch(ibi_sec, fs=fs_interp, nperseg=nperseg)
+            lf_band = (freqs >= 0.04) & (freqs <= 0.15)
+            hf_band = (freqs >= 0.15) & (freqs <= 0.4)
+            df = freqs[1] - freqs[0] if len(freqs) > 1 else 0.0
+
+            lf_power = np.sum(psd[lf_band]) * df
+            hf_power = np.sum(psd[hf_band]) * df
+
+            lf_hf = lf_power / hf_power if hf_power > 0 else 0.0
+        else:
+            lf_hf = 0.0
+    except Exception:
+        lf_hf = 0.0
+
+    # Basic rule-based Stress Classifier
+    # High stress usually correlates with Low HRV (RMSSD), High LF/HF, and Higher BPM
+    stress_index = 0.0
+
+    if rmssd < 0.02:
+        stress_index += 40
+    elif rmssd < 0.035:
+        stress_index += 20
+
+    if lf_hf > 1.5:
+        stress_index += 40
+    elif lf_hf > 1.0:
+        stress_index += 20
+
+    mean_bpm = 60.0 / np.mean(ibi_sec)
+    if mean_bpm > 90:
+        stress_index += 20
+    elif mean_bpm > 80:
+        stress_index += 10
+
+    if stress_index >= 60:
+        stress_level = "High"
+    elif stress_index >= 30:
+        stress_level = "Medium"
+    else:
+        stress_level = "Low"
+
+    return {
+        "rmssd_ms": float(rmssd * 1000.0),
+        "sdnn_ms": float(sdnn * 1000.0),
+        "lf_hf_ratio": float(lf_hf),
+        "stress_index": float(stress_index),
+        "stress_level": stress_level,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. MAIN PIPELINE ENTRY POINT
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def process_rppg(rgb_raw, fps=30, motion_scores=None):
+    """
+    Orchestrates the entire signal processing pipeline from raw RGB to pulse results.
+    Uses the POS algorithm (Wang et al., 2017).
+    """
+    # 1. Motion
+    if motion_scores is not None:
+        motion_fraction = float((motion_scores > 0.05).mean())
+    else:
+        bad_frames = detect_motion_frames(rgb_raw)
+        motion_fraction = float(bad_frames.mean())
+
+    # 2. Preprocess (POS needs channel means intact)
+    rgb_detrended = detrend_rgb(rgb_raw)
+
+    # 3. Extract using POS
+    pulse = pos_algorithm(rgb_detrended, fps)
+
+    # 4. Clean & Post-process
+    pulse = remove_motion_artifacts(pulse, fps, method="savgol")
+    peaks_idx, ibi_ms, clean_pulse = extract_pulse_waveform(pulse, fps)
+    confidence, details, is_reliable = compute_confidence_score(
+        clean_pulse, fps, ibi_ms
+    )
+
+    # 5. HRV & Stress feature extraction
+    hrv_features = compute_hrv_features(ibi_ms)
+
+    return {
+        "pulse_signal": clean_pulse,
+        "timestamps": np.arange(len(rgb_raw)) / fps,
+        "fps": fps,
+        "peaks_idx": peaks_idx,
+        "ibi_ms": ibi_ms,
+        "confidence": confidence,
+        "is_reliable": is_reliable,
+        "confidence_details": details,
+        "hrv_features": hrv_features,
+        "motion_fraction": motion_fraction,
+        "method_used": "pos",
+        "n_frames": len(rgb_raw),
+        "duration_sec": len(rgb_raw) / fps,
+    }
