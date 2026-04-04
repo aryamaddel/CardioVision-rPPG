@@ -359,31 +359,13 @@ def process_rppg(
     # 3. Extract using POS
     pulse = pos_algorithm(rgb_detrended, fps)
 
-    # 4. Clean & Post-process
-    pulse = remove_motion_artifacts(pulse, fps, method="savgol")
-    peaks_idx, ibi_ms, clean_pulse = extract_pulse_waveform(pulse, fps)
-    confidence, details, is_reliable = compute_confidence_score(
-        clean_pulse, fps, ibi_ms
+    return _summarize_pulse(
+        pulse=pulse,
+        fps=fps,
+        motion_fraction=motion_fraction,
+        method_used="pos",
+        n_frames=len(rgb_raw),
     )
-
-    # 5. HRV & Stress feature extraction
-    hrv_features = compute_hrv_features(ibi_ms)
-
-    return {
-        "pulse_signal": clean_pulse,
-        "timestamps": np.arange(len(rgb_raw)) / fps,
-        "fps": fps,
-        "peaks_idx": peaks_idx,
-        "ibi_ms": ibi_ms,
-        "confidence": confidence,
-        "is_reliable": is_reliable,
-        "confidence_details": details,
-        "hrv_features": hrv_features,
-        "motion_fraction": motion_fraction,
-        "method_used": "pos",
-        "n_frames": len(rgb_raw),
-        "duration_sec": len(rgb_raw) / fps,
-    }
 
 
 def _evaluate_pulse_candidate(
@@ -394,6 +376,28 @@ def _evaluate_pulse_candidate(
     n_frames: int,
 ) -> dict:
     """Score one pulse candidate using the same post-processing path as POS."""
+    return _summarize_pulse(
+        pulse=pulse,
+        fps=fps,
+        motion_fraction=motion_fraction,
+        method_used=method_used,
+        n_frames=n_frames,
+    )
+
+
+def _bpm_from_ibi(ibi_ms: np.ndarray) -> float | None:
+    if ibi_ms.size == 0:
+        return None
+    return float(60000.0 / np.median(ibi_ms))
+
+
+def _summarize_pulse(
+    pulse: np.ndarray,
+    fps: float,
+    motion_fraction: float,
+    method_used: str,
+    n_frames: int,
+) -> dict:
     pulse = remove_motion_artifacts(pulse, fps, method="savgol")
     peaks_idx, ibi_ms, clean_pulse = extract_pulse_waveform(pulse, fps)
     confidence, details, is_reliable = compute_confidence_score(clean_pulse, fps, ibi_ms)
@@ -413,12 +417,6 @@ def _evaluate_pulse_candidate(
         "n_frames": n_frames,
         "duration_sec": n_frames / fps,
     }
-
-
-def _bpm_from_ibi(ibi_ms: np.ndarray) -> float | None:
-    if ibi_ms.size == 0:
-        return None
-    return float(60000.0 / np.median(ibi_ms))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -10,7 +10,6 @@ import numpy as np
 from roi_pipeline import (
     MIN_ROI_PIXELS,
     FaceROIExtractor,
-    compute_mad_confidence,
     get_mean_rgb,
     overlay_roi,
 )
@@ -124,7 +123,6 @@ class RealtimeRPPGPipeline:
             }
 
         r, g, b = get_mean_rgb(frame_bgr, roi_res.masks["face"])
-        _ = compute_mad_confidence({"face": g})
         self.rgb_samples.append([r, g, b])
         self.face_frames.append(roi_res.crops["face"])
         self.sample_ts_ms.append(int(ts_ms))

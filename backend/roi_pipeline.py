@@ -370,10 +370,11 @@ def compute_mad_confidence(roi_g_values: Dict[str, float]) -> float:
 
 def overlay_roi(frame: np.ndarray, roi_masks: Dict[str, np.ndarray]) -> np.ndarray:
     vis = frame.copy()
-    for roi, color in ROI_COLORS.items():
-        if roi not in roi_masks:
-            continue
-        overlay = vis.copy()
-        overlay[roi_masks[roi] > 0] = color
-        cv2.addWeighted(overlay, 0.38, vis, 0.62, 0, vis)
+    face_mask = roi_masks.get("face")
+    if face_mask is None:
+        return vis
+
+    overlay = vis.copy()
+    overlay[face_mask > 0] = ROI_COLORS["face"]
+    cv2.addWeighted(overlay, 0.38, vis, 0.62, 0, vis)
     return vis
