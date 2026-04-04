@@ -1,10 +1,11 @@
 // app/index.tsx — HomeScreen
-import React, { useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Animated, Dimensions, ScrollView, Image } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Animated, Dimensions, ScrollView, Image, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
+import * as DocumentPicker from 'expo-document-picker';
 import Svg, { Path, Line, Circle as SvgCircle, Defs, LinearGradient as SvgLinGrad, Stop } from 'react-native-svg';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, Typography, Spacing, Radius, Shadows } from '../src/theme';
@@ -55,6 +56,7 @@ function FlowNode({ icon, label, index, total }: { icon: string; label: string; 
 export default function HomeScreen() {
   const router = useRouter();
   const { colors, accent, isDark, toggle } = useTheme();
+  const [isPickingVideo, setIsPickingVideo] = useState(false);
   const heroAlpha = useRef(new Animated.Value(0)).current;
   const heroY = useRef(new Animated.Value(30)).current;
   const btnScale = useRef(new Animated.Value(0.95)).current;
@@ -70,6 +72,33 @@ export default function HomeScreen() {
   const handleScan = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     router.push('/record');
+  };
+
+  const handleUploadVideo = async () => {
+    if (isPickingVideo) {
+      return;
+    }
+
+    setIsPickingVideo(true);
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['video/*'],
+      });
+
+      if (result.canceled || !result.assets?.[0]?.uri) {
+        return;
+      }
+
+      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      router.push({
+        pathname: '/processing',
+        params: { videoUri: result.assets[0].uri },
+      });
+    } catch {
+      Alert.alert('Unable to pick video', 'Please try again.');
+    } finally {
+      setIsPickingVideo(false);
+    }
   };
 
   const flowSteps = [
@@ -154,9 +183,14 @@ export default function HomeScreen() {
             </TouchableOpacity>
 
             <TouchableOpacity
-              onPress={() => { /* TODO: video upload picker */ }}
+              onPress={handleUploadVideo}
+              disabled={isPickingVideo}
               activeOpacity={0.9}
-              style={[styles.uploadButton, { borderColor: accent.primary }]}
+              style={[
+                styles.uploadButton,
+                { borderColor: accent.primary },
+                isPickingVideo && styles.uploadButtonDisabled,
+              ]}
             >
               <Ionicons name="cloud-upload-outline" size={20} color={accent.primary} style={{ marginRight: 10 }} />
               <Text style={[styles.uploadText, { color: accent.primary }]}>Upload a Video</Text>
@@ -207,6 +241,7 @@ const styles = StyleSheet.create({
   ctaText: { fontFamily: 'SpaceGrotesk-Bold', fontSize: 18, color: '#FFF' },
   ctaSubtext: { fontFamily: 'SpaceGrotesk-Regular', fontSize: 11, color: 'rgba(255,255,255,0.7)' },
   uploadButton: { borderRadius: Radius.lg, borderWidth: 1.5, paddingVertical: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  uploadButtonDisabled: { opacity: 0.6 },
   uploadText: { fontFamily: 'SpaceGrotesk-SemiBold', fontSize: 16 },
 
   footer: { ...Typography.label, textAlign: 'center', marginTop: Spacing.xl },
