@@ -1,6 +1,6 @@
 // app/record.tsx — RecordScreen
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Animated, Dimensions, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Animated, Dimensions, Alert, Image } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -8,6 +8,8 @@ import * as Haptics from 'expo-haptics';
 import Svg, { Circle, Ellipse, Rect, Text as SvgText } from 'react-native-svg';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, Typography, Spacing, Radius } from '../src/theme';
+import { LiveRPPGClient, getMockResult, type RPPGResult } from '../src/api/rppgService';
+import { clearScanSession, setScanSession } from '../src/state/scanSession';
 
 const { width, height: screenH } = Dimensions.get('window');
 const RECORD_DURATION = 30;
@@ -93,30 +95,34 @@ export default function RecordScreen() {
   const [timeLeft, setTimeLeft] = useState(RECORD_DURATION);
   const [progress, setProgress] = useState(0);
   const [quality, setQuality] = useState(0);
+  const [liveBpm, setLiveBpm] = useState<number | null>(null);
+  const [liveMethod, setLiveMethod] = useState('pending');
+  const [overlayJpeg, setOverlayJpeg] = useState<string | null>(null);
   const [snack, setSnack] = useState({ msg: '', show: false, key: 0 });
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const framePumpRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const sendingFrameRef = useRef(false);
+  const liveClientRef = useRef<LiveRPPGClient | null>(null);
+  const fallbackVideoPromiseRef = useRef<Promise<{ uri: string } | null> | null>(null);
+  const usingLiveStreamRef = useRef(false);
   const qualityAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => { if (!permission?.granted) requestPermission(); }, []);
 
-  // Simulate signal quality + snackbar warnings
   useEffect(() => {
-    if (isRecording) {
-      const q = setInterval(() => {
-        const v = 0.55 + Math.random() * 0.4;
-        setQuality(v);
-        Animated.timing(qualityAnim, { toValue: v, duration: 400, useNativeDriver: false }).start();
-        // Random annotation warnings
-        const rand = Math.random();
-        if (rand < 0.05) setSnack({ msg: 'Camera is too shaky — hold steady', show: true, key: Date.now() });
-        else if (rand < 0.08) setSnack({ msg: 'Low lighting detected — move to brighter area', show: true, key: Date.now() });
-        else if (rand < 0.10) setSnack({ msg: 'Face not fully in oval boundary', show: true, key: Date.now() });
-      }, 800);
-      return () => clearInterval(q);
-    }
-  }, [isRecording]);
+    Animated.timing(qualityAnim, { toValue: quality, duration: 300, useNativeDriver: false }).start();
+  }, [quality]);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (framePumpRef.current) clearInterval(framePumpRef.current);
+      liveClientRef.current?.disconnect();
+    };
+  }, []);
 
   const startCountdown = async () => {
+    clearScanSession();
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setCountdown3(true); setCountdownN(3);
     let n = 3;
@@ -129,28 +135,127 @@ export default function RecordScreen() {
 
   const startRecording = useCallback(async () => {
     if (!camRef.current) return;
-    setIsRecording(true); setTimeLeft(RECORD_DURATION);
+    usingLiveStreamRef.current = false;
+    try {
+      const client = new LiveRPPGClient({
+        onFrame: (frame) => {
+          setQuality(frame.metric.confidence ?? 0);
+          setLiveBpm(frame.metric.bpm ?? null);
+          setLiveMethod(frame.metric.method ?? 'pending');
+          if (frame.overlay_jpeg_b64) {
+            setOverlayJpeg(`data:image/jpeg;base64,${frame.overlay_jpeg_b64}`);
+          }
+          if (!frame.has_face) {
+            setSnack({ msg: 'Face not detected. Keep your face inside the oval.', show: true, key: Date.now() });
+          }
+        },
+      });
+      await client.connect(3500);
+      liveClientRef.current = client;
+      usingLiveStreamRef.current = true;
+    } catch {
+      Alert.alert(
+        'Live stream unavailable',
+        'Falling back to standard recording and upload mode. Check backend websocket server/IP for live overlay.',
+      );
+    }
+
+    setIsRecording(true); setTimeLeft(RECORD_DURATION); setQuality(0); setLiveBpm(null); setLiveMethod('pending'); setOverlayJpeg(null);
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     let elapsed = 0;
     timerRef.current = setInterval(() => {
       elapsed++; setTimeLeft(RECORD_DURATION - elapsed); setProgress(elapsed / RECORD_DURATION);
       if (elapsed >= RECORD_DURATION) stopRecording();
     }, 1000);
-    try {
-      const video = await camRef.current.recordAsync({ maxDuration: RECORD_DURATION });
-      if (video?.uri) router.push({ pathname: '/processing', params: { videoUri: video.uri } });
-    } catch (e) { Alert.alert('Recording failed', 'Please try again.'); reset(); }
+    if (usingLiveStreamRef.current) {
+      framePumpRef.current = setInterval(() => {
+        void captureAndStreamFrame();
+      }, 250);
+      return;
+    }
+
+    fallbackVideoPromiseRef.current = camRef.current
+      .recordAsync({ maxDuration: RECORD_DURATION })
+      .then((video) => (video?.uri ? { uri: video.uri } : null))
+      .catch(() => null);
   }, [router]);
+
+  const captureAndStreamFrame = useCallback(async () => {
+    if (!camRef.current || !liveClientRef.current || sendingFrameRef.current) return;
+    sendingFrameRef.current = true;
+    try {
+      const snap = await camRef.current.takePictureAsync({
+        base64: true,
+        quality: 0.45,
+        skipProcessing: true,
+        shutterSound: false,
+      });
+      if (snap?.base64) {
+        liveClientRef.current.sendFrameBase64(snap.base64, Date.now());
+      }
+    } catch {
+      // Ignore transient frame capture errors during live stream.
+    } finally {
+      sendingFrameRef.current = false;
+    }
+  }, []);
 
   const stopRecording = useCallback(async () => {
     if (timerRef.current) clearInterval(timerRef.current);
+    if (framePumpRef.current) clearInterval(framePumpRef.current);
     await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    camRef.current?.stopRecording(); setIsRecording(false);
+    setIsRecording(false);
+
+    if (!usingLiveStreamRef.current) {
+      try { camRef.current?.stopRecording(); } catch {}
+      const fallbackVideo = await fallbackVideoPromiseRef.current;
+      fallbackVideoPromiseRef.current = null;
+      if (fallbackVideo?.uri) {
+        router.push({
+          pathname: '/processing',
+          params: {
+            videoUri: fallbackVideo.uri,
+          },
+        });
+        return;
+      }
+
+      router.push({
+        pathname: '/processing',
+      });
+      setScanSession({ result: getMockResult() });
+      return;
+    }
+
+    let finalResult: RPPGResult | null = null;
+    try {
+      if (!liveClientRef.current) {
+        throw new Error('Live client missing');
+      }
+      finalResult = await liveClientRef.current.stopAndGetFinalResult(60000);
+    } catch {
+      finalResult = getMockResult();
+    } finally {
+      liveClientRef.current?.disconnect();
+      liveClientRef.current = null;
+    }
+
+    setScanSession({ result: finalResult });
+    router.push({ pathname: '/processing' });
   }, []);
 
   const reset = () => {
     if (timerRef.current) clearInterval(timerRef.current);
+    if (framePumpRef.current) clearInterval(framePumpRef.current);
+    if (!usingLiveStreamRef.current) {
+      try { camRef.current?.stopRecording(); } catch {}
+    }
+    liveClientRef.current?.disconnect();
+    liveClientRef.current = null;
+    fallbackVideoPromiseRef.current = null;
+    usingLiveStreamRef.current = false;
     setIsRecording(false); setCountdown3(false); setTimeLeft(RECORD_DURATION); setProgress(0);
+    setQuality(0); setLiveBpm(null); setLiveMethod('pending'); setOverlayJpeg(null);
   };
 
   if (!permission?.granted) {
@@ -172,6 +277,7 @@ export default function RecordScreen() {
   return (
     <View style={styles.root}>
       <CameraView ref={camRef} style={StyleSheet.absoluteFill} facing="front" mode="video" videoQuality="720p" />
+      {overlayJpeg && isRecording && <Image source={{ uri: overlayJpeg }} style={StyleSheet.absoluteFill} resizeMode="cover" />}
       <View style={styles.overlay} />
       <View style={styles.guideContainer}><FaceGuideOverlay isRecording={isRecording} /></View>
 
@@ -201,9 +307,9 @@ export default function RecordScreen() {
         {/* Live BPM — show "--" since no actual live data yet */}
         {isRecording && (
           <View style={styles.bpmOverlay}>
-            <Text style={styles.bpmNum}>--</Text>
+            <Text style={styles.bpmNum}>{liveBpm !== null ? Math.round(liveBpm) : '--'}</Text>
             <Text style={styles.bpmLabel}>BPM</Text>
-            <Text style={styles.instructText}>Stay still. Look at the camera.</Text>
+            <Text style={styles.instructText}>Stay still. Method: {liveMethod.toUpperCase()}</Text>
           </View>
         )}
 

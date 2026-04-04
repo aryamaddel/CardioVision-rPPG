@@ -1,34 +1,49 @@
-import argparse
 import time
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Generator, Optional, Tuple, Union, cast
+from typing import Dict, Generator, Optional, Tuple, Union
+
 import cv2
 import mediapipe as mp
 import numpy as np
-import pandas as pd
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision as mp_vision
-from tqdm import tqdm
-from rppg_core import process_rppg_with_deep
 
 MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
     "face_landmarker/float16/1/face_landmarker.task"
 )
-DEFAULT_MODEL_PATH = str(Path(__file__).with_name("face_landmarker.task"))
 
-# Exclusion indices for inverting the ROI selection methodology
 _EXCLUDE_EYE_L = [33, 160, 158, 133, 153, 144]
 _EXCLUDE_EYE_R = [362, 385, 387, 263, 373, 380]
 _EXCLUDE_BROW_L = [70, 63, 105, 66, 107, 55, 65, 52, 53, 46]
 _EXCLUDE_BROW_R = [336, 296, 334, 293, 300, 285, 295, 282, 283, 276]
-_EXCLUDE_LIPS = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 409, 270, 269, 267, 0, 37, 39, 40, 185, 61]
+_EXCLUDE_LIPS = [
+    61,
+    146,
+    91,
+    181,
+    84,
+    17,
+    314,
+    405,
+    321,
+    375,
+    291,
+    409,
+    270,
+    269,
+    267,
+    0,
+    37,
+    39,
+    40,
+    185,
+    61,
+]
 
 ROI_COLORS = {"face": (0, 140, 255)}
-
 MIN_ROI_PIXELS = 150
 _ERODE_KERNEL = np.ones((5, 5), np.uint8)
 MIN_FACE_AREA_RATIO = 0.08
@@ -113,7 +128,7 @@ class FaceROIExtractor:
     def __init__(self, model_path: str):
         p = Path(model_path)
         if not p.exists():
-            print("Downloading MediaPipe Face Landmarker model …")
+            print("Downloading MediaPipe Face Landmarker model ...")
             urllib.request.urlretrieve(MODEL_URL, str(p))
         opts = mp_vision.FaceLandmarkerOptions(
             base_options=mp_python.BaseOptions(model_asset_path=str(p)),
@@ -179,8 +194,8 @@ class FaceROIExtractor:
             return None
 
         crops = {}
-        for roi_name, m in masks.items():
-            ys, xs = np.where(m > 0)
+        for roi_name, mask in masks.items():
+            ys, xs = np.where(mask > 0)
             if ys.size:
                 y1, y2 = ys.min(), ys.max()
                 x1, x2 = xs.min(), xs.max()
@@ -344,9 +359,6 @@ def get_mean_rgb(frame: np.ndarray, mask: np.ndarray):
     return float(np.mean(px[:, 2])), float(np.mean(px[:, 1])), float(np.mean(px[:, 0]))
 
 
-
-
-
 def compute_mad_confidence(roi_g_values: Dict[str, float]) -> float:
     vals = [v for v in roi_g_values.values() if not np.isnan(v)]
     if len(vals) < 2:
@@ -356,229 +368,12 @@ def compute_mad_confidence(roi_g_values: Dict[str, float]) -> float:
     return float(np.clip(1.0 - mad / 20.0, 0.0, 1.0))
 
 
-def run_extraction(args):
-    out_dir = Path(args.output)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    ts_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    with VideoSource(args.source, args.fps) as vid, FaceROIExtractor(args.model_path) as roi_ext:
-        print(
-            f"Source : {args.source}\n"
-            f"Resolution : {vid.width}×{vid.height} @ {vid.orig_fps:.1f} fps\n"
-        )
-
-        data = {"ts": [], "idx": [], "r_face": [], "g_face": [], "b_face": [], "conf": []}
-        face_crops = []
-        writer = None
-        if args.save_preview:
-            writer = cv2.VideoWriter(
-                str(out_dir / f"preview_{ts_tag}.mp4"),
-                cv2.VideoWriter.fourcc(*"mp4v"),
-                args.fps,
-                (vid.width, vid.height),
-            )
-
-        total_frames = int(args.duration * args.fps) if args.duration else None
-        pbar = tqdm(vid.frames(args.duration), total=total_frames, desc="Processing", unit="fr")
-
-        for idx, (ts, frame) in enumerate(pbar):
-            roi_res = roi_ext.process(frame, int(ts * 1000))
-            if roi_res is None:
-                continue
-
-            valid_quality = all(px >= MIN_ROI_PIXELS for px in roi_res.px_counts.values())
-            if not valid_quality:
-                roi_ext.stats["low_quality"] += 1
-                if not (args.preview or writer):
-                    continue
-
-            if valid_quality:
-                r, g, b = get_mean_rgb(frame, roi_res.masks["face"])
-                data["ts"].append(ts)
-                data["idx"].append(idx)
-                data["r_face"].append(r)
-                data["g_face"].append(g)
-                data["b_face"].append(b)
-                data["conf"].append(compute_mad_confidence({"face": g}))
-                face_crops.append(roi_res.crops["face"])
-
-            if args.preview or writer:
-                vis = frame.copy()
-                for roi, color in ROI_COLORS.items():
-                    overlay = vis.copy()
-                    overlay[roi_res.masks[roi] > 0] = color
-                    cv2.addWeighted(overlay, 0.38, vis, 0.62, 0, vis)
-                if writer:
-                    writer.write(vis)
-                if args.preview:
-                    cv2.imshow("CardioVision v3", vis)
-                    if cv2.waitKey(1) & 0xFF == ord("q"):
-                        break
-
-            pbar.set_postfix(
-                det=roi_ext.stats["detected"],
-                miss=roi_ext.stats["failed"],
-                low_q=roi_ext.stats["low_quality"],
-                conf=f"{data['conf'][-1]:.2f}" if valid_quality else "---",
-            )
-
-        if writer:
-            writer.release()
-        cv2.destroyAllWindows()
-
-        if not data["ts"]:
-            print("No usable frames — check lighting and source.")
-            return
-
-        df = pd.DataFrame(data)
-        for ch in ("r", "g", "b"):
-            df[f"{ch}_combined"] = df[f"{ch}_face"]
-
-        csv_path = out_dir / f"signals_{ts_tag}.csv"
-        npz_path = out_dir / f"signals_{ts_tag}.npz"
-        df.to_csv(csv_path, index=False)
-
-        npz_payload: Dict[str, Any] = {
-            str(c): np.asarray(df[c].to_numpy(copy=False)) for c in df.columns
-        }
-        np.savez_compressed(
-            npz_path,
-            **cast(dict[str, Any], npz_payload),
-        )
-
-        print(f"\n✓ Saved CSV : {csv_path}")
-        print(f"✓ Saved NPZ : {npz_path}")
-        print(f" Detected : {roi_ext.stats['detected']}/{roi_ext.stats['detected'] + roi_ext.stats['failed']} frames")
-        print(f" Low-quality: {roi_ext.stats['low_quality']} frames discarded (< {MIN_ROI_PIXELS}px)")
-        print(f" Non-human rejects: {roi_ext.stats['rejected_nonhuman']}")
-        print(
-            " Guardrail rejects -> "
-            f"area:{roi_ext.stats['rej_area']} "
-            f"skin_ycrcb:{roi_ext.stats['rej_skin_ycrcb']} "
-            f"skin_hsv:{roi_ext.stats['rej_skin_hsv']} "
-            f"skin_iou:{roi_ext.stats['rej_skin_iou']} "
-            f"geometry:{roi_ext.stats['rej_geometry']} "
-            f"texture:{roi_ext.stats['rej_texture']}"
-        )
-        print(f" Usable : {len(df)} frames written to disk")
-        print(f" Mean conf : {df['conf'].mean():.3f}")
-
-        ts_values = np.asarray(df["ts"].to_numpy(copy=False), dtype=np.float64)
-        actual_fps = 1.0 / np.mean(np.diff(ts_values)) if len(ts_values) > 1 else args.fps
-
-        r_interp = np.asarray(
-            df["r_combined"].interpolate().to_numpy(copy=False), dtype=np.float64
-        )
-        g_interp = np.asarray(
-            df["g_combined"].interpolate().to_numpy(copy=False), dtype=np.float64
-        )
-        b_interp = np.asarray(
-            df["b_combined"].interpolate().to_numpy(copy=False), dtype=np.float64
-        )
-        rgb = np.column_stack(
-            [
-                r_interp,
-                g_interp,
-                b_interp,
-            ]
-        )
-        fps_for_processing = int(round(actual_fps)) if actual_fps > 0 else int(args.fps)
-        face_frames = np.asarray(face_crops, dtype=np.uint8) if face_crops else None
-        result = process_rppg_with_deep(
-            rgb_raw=rgb,
-            fps=fps_for_processing,
-            face_frames=face_frames,
-            selection_mode="best_confidence",
-        )
-
-        proc_path = out_dir / f"processed_{ts_tag}.npz"
-        np.savez_compressed(
-            proc_path,
-            pulse_signal=result["pulse_signal"],
-            timestamps=result["timestamps"],
-            fps=result["fps"],
-            peaks_idx=result["peaks_idx"],
-            ibi_ms=result["ibi_ms"],
-            confidence=result["confidence"],
-            is_reliable=result["is_reliable"],
-            motion_fraction=result["motion_fraction"],
-            method_used=result["method_used"],
-            n_frames=result["n_frames"],
-            duration_sec=result["duration_sec"],
-        )
-        print(f"\n✓ Saved processed : {proc_path}")
-
-        if result["is_reliable"] and len(result["ibi_ms"]) > 0:
-            bpm = 60000.0 / result["ibi_ms"].mean()
-            print(f" ♥ Estimated HR : {bpm:.1f} BPM")
-            print(f" ♥ Mean IBI : {result['ibi_ms'].mean():.1f} ms")
-
-            hrv = result.get("hrv_features", {})
-            if hrv:
-                print(f" 📊 RMSSD : {hrv.get('rmssd_ms', 0):.1f} ms")
-                print(f" 📊 SDNN : {hrv.get('sdnn_ms', 0):.1f} ms")
-                print(f" 📈 LF/HF Ratio : {hrv.get('lf_hf_ratio', 0):.2f}")
-                print(f" 🧠 Stress Level : {hrv.get('stress_level', 'Unknown')} (Index: {hrv.get('stress_index', 0):.1f})")
-
-            print(f" Confidence : {result['confidence']:.3f}")
-            print(f" Reliable : {result['is_reliable']}")
-            print(f" Motion fraction : {result['motion_fraction']:.1%}")
-            print(f" Method selected : {result.get('selected_source', result.get('method_used', 'pos'))}")
-            print(f" POS confidence : {result.get('pos_confidence', 0.0):.3f}")
-            print(f" Deep confidence : {result.get('deep_confidence', 0.0):.3f}")
-
-
-def main():
-    p = argparse.ArgumentParser(
-        description="CardioVision rPPG Pipeline v3",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
-    p.add_argument(
-        "--source", default="0", help="Webcam index (int) or path to video file"
-    )
-    p.add_argument("--fps", type=float, default=60.0)
-    p.add_argument(
-        "--duration",
-        type=float,
-        default=None,
-        help="Seconds to record (None = until 'q' or EOF)",
-    )
-    p.add_argument("--output", default="./output")
-    p.add_argument("--preview", action="store_true", help="Show live overlay window")
-    p.add_argument("--save-preview", action="store_true")
-    p.add_argument("--model", default=DEFAULT_MODEL_PATH, dest="model_path")
-    p.add_argument(
-        "--mode",
-        choices=["batch", "stream"],
-        default="batch",
-        help="batch: process a source file/webcam, stream: start websocket backend",
-    )
-    p.add_argument("--ws-host", default="0.0.0.0")
-    p.add_argument("--ws-port", type=int, default=8765)
-    p.add_argument("--jpeg-quality", type=int, default=75)
-
-    args = p.parse_args()
-    if args.mode == "stream":
-        import asyncio
-        from stream_server import run_server
-
-        asyncio.run(
-            run_server(
-                host=args.ws_host,
-                port=args.ws_port,
-                fps=args.fps,
-                model_path=args.model_path,
-                jpeg_quality=args.jpeg_quality,
-            )
-        )
-        return
-
-    try:
-        args.source = int(args.source)
-    except ValueError:
-        pass
-    run_extraction(args)
-
-
-if __name__ == "__main__":
-    main()
+def overlay_roi(frame: np.ndarray, roi_masks: Dict[str, np.ndarray]) -> np.ndarray:
+    vis = frame.copy()
+    for roi, color in ROI_COLORS.items():
+        if roi not in roi_masks:
+            continue
+        overlay = vis.copy()
+        overlay[roi_masks[roi] > 0] = color
+        cv2.addWeighted(overlay, 0.38, vis, 0.62, 0, vis)
+    return vis

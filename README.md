@@ -1,156 +1,63 @@
-# CardioVision — React Native App
+# CardioVision
 
-Contact-free cardiac monitoring via rPPG. Monochromatic "Clinical Noir" design.
+Contact-free cardiac monitoring with live rPPG streaming.
 
-## Architecture
+## Current Project Layout
 
-```
-React Native App (Expo)
-       │
-       │  POST /process (multipart video)
-       ▼
-Flask API Server (server.py)
-       │
-       ├── FaceROIExtractor (main.py)
-       ├── POS Algorithm (rppg_core.py)
-       ├── PhysFormer Deep Model (deep_rppg.py)
-       ├── HRV + Stress (rppg_core.py)
-       └── Triage Agent (triage_agent.py)
-```
+- `backend/`: Python realtime streaming backend (ROI, POS, deep_rPPG, triage)
+- `mobileAppExpo/`: Expo React Native mobile app
 
-## Screens
+## Realtime Streaming Pipeline
 
-| Screen | Description |
-|--------|-------------|
-| **HomeScreen** | Hero with live BPM preview, ECG animation, pipeline breakdown |
-| **RecordScreen** | 30s camera capture with face guide oval, countdown, signal quality meter |
-| **ProcessingScreen** | Animated 8-step pipeline progress |
-| **ResultsScreen** | Full biometric dashboard: BPM, waveform, IBI chart, HRV, stress, health tips |
-| **VideoPlaybackScreen** | Playback with green channel overlay + real pulse markers on face |
+1. Mobile app captures front-camera frames.
+2. Frames stream to backend over WebSocket.
+3. Backend applies face ROI pipeline and returns overlay frames.
+4. Backend computes POS/deep_rPPG incrementally.
+5. On stop, backend returns final result payload (BPM, HRV, confidence, triage).
 
-## Setup
-
-### 1. Backend (Python)
+## Run Backend
 
 ```bash
-cd your_rppg_project/
-
-pip install flask flask-cors
-
-# Update your rppg_core.py to include process_rppg_with_deep()
-# (see previous conversation for that code)
-
-python server.py
-# → Running on http://0.0.0.0:5000
+cd backend
+uv sync
+uv run main.py --mode stream --ws-host 0.0.0.0 --ws-port 8765
 ```
 
-Find your laptop IP:
-```bash
-# macOS/Linux
-ifconfig | grep "inet " | grep -v 127.0.0.1
-# Windows
-ipconfig | findstr "IPv4"
+Expected startup log:
+
+```text
+WebSocket server listening on ws://0.0.0.0:8765
 ```
 
-### 2. React Native App
+## Run Mobile App
 
 ```bash
-cd cardio_app/
-
-npm install
-
-# Update the IP in src/api/rppgService.ts:
-# const BASE_URL = 'http://YOUR_LAPTOP_IP:5000';
+cd mobileAppExpo
+bun install
+EXPO_PUBLIC_BACKEND_HOST=<YOUR_LAPTOP_IP> bunx expo start --lan
 ```
 
-**Run on device:**
-```bash
-npx expo start
-# Scan QR code with Expo Go app
-```
+Notes:
 
-**Run on simulator:**
-```bash
-npx expo start --ios
-npx expo start --android
-```
+- Phone and laptop must be on the same Wi-Fi.
+- Use LAN mode for local WebSocket connectivity.
 
-### 3. Test without backend
+## Main Runtime Files
 
-The app uses `getMockResult()` as automatic fallback when the backend
-is unavailable. You'll see realistic fake data for UI testing.
+Backend:
 
-## Key Files
+- `backend/main.py`
+- `backend/stream_server.py`
+- `backend/streaming_pipeline.py`
+- `backend/roi_pipeline.py`
+- `backend/rppg_core.py`
+- `backend/deep_rppg.py`
+- `backend/triage_agent.py`
 
-```
-cardio_app/
-├── App.tsx                          # Navigation root
-├── server.py                        # Flask API (copy to your rPPG folder)
-├── src/
-│   ├── api/rppgService.ts           # API calls + mock data
-│   ├── theme/index.ts               # Design system + health tips
-│   ├── screens/
-│   │   ├── HomeScreen.tsx           # Landing with ECG animation
-│   │   ├── RecordScreen.tsx         # Camera + 30s countdown
-│   │   ├── ProcessingScreen.tsx     # Animated pipeline steps
-│   │   ├── ResultsScreen.tsx        # Full biometric dashboard
-│   │   └── VideoPlaybackScreen.tsx  # Green channel replay
-```
+Frontend:
 
-## Connecting to Your Pipeline
-
-The app sends video to `POST /process` and expects this JSON shape:
-
-```json
-{
-  "pulse_signal": [0.1, 0.2, ...],   // 1D normalized array
-  "timestamps":   [0.0, 0.033, ...], // seconds
-  "peaks_idx":    [27, 56, 89, ...], // frame indices of heartbeats
-  "ibi_ms":       [865, 870, ...],   // inter-beat intervals
-  "fps":          30,
-  "bpm":          72.1,
-  "confidence":   0.81,
-  "is_reliable":  true,
-  "confidence_details": {
-    "ibi_regularity": 0.88,
-    "snr": 0.79,
-    "density": 0.92,
-    "duration": 1.0
-  },
-  "hrv_features": {
-    "rmssd_ms":    34.2,
-    "sdnn_ms":     42.3,
-    "lf_hf_ratio": 0.87,
-    "stress_index": 22,
-    "stress_level": "Low"
-  },
-  "method_used":     "pos+deep_ensemble",
-  "deep_model_used": "PhysFormer.pure",
-  "triage_mode":     "BIOMETRIC",
-  "triage_reason":   "Signal reliable (confidence=0.81)",
-  "visual_stress":   0,
-  "duration_sec":    30,
-  "frames_processed": 900,
-  "status":          "success"
-}
-```
-
-## Design System
-
-**Clinical Noir** — pure monochromatic palette, surgical precision.
-
-- Background: `#080808` (near-black)  
-- Surface: `#111111`
-- Accent: pure `#FFFFFF` with opacity variants
-- Green channel overlay: `rgba(0, 220, 80, ...)` on video playback only
-- Font: Space Grotesk (tabular numerals for vitals)
-- Animations: React Native Animated API (no Reanimated dependency)
-
-## Health Tips Logic
-
-Tips are selected based on the result:
-- `stress_level === 'High'`   → breathing exercises, hydration, cold water
-- `stress_level === 'Medium'` → music, outdoor walk
-- `stress_level === 'Low'`    → Zone 2 cardio, sleep optimization  
-- `bpm > 90`                  → stimulant avoidance, cooling
-- Always: measurement consistency tip
+- `mobileAppExpo/app/record.tsx`
+- `mobileAppExpo/app/processing.tsx`
+- `mobileAppExpo/app/results.tsx`
+- `mobileAppExpo/src/api/rppgService.ts`
+- `mobileAppExpo/src/state/scanSession.ts`

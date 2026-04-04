@@ -7,9 +7,10 @@ import Svg, { Circle } from 'react-native-svg';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, Typography, Spacing, Radius } from '../src/theme';
 import { processVideo, getMockResult } from '../src/api/rppgService';
+import { getScanSession, setScanSession } from '../src/state/scanSession';
 
 const STEPS = [
-  { id: 'upload',  label: 'Uploading video',      sub: 'Transferring to processing pipeline', detail: 'The recorded MP4 video is uploaded to the backend server via multipart form data over HTTP. The file is temporarily stored for frame extraction.' },
+  { id: 'upload',  label: 'Streaming capture',      sub: 'Live frames sent to backend websocket', detail: 'The mobile app streams JPEG camera frames to the backend over websocket. If websocket is unavailable, the app falls back to HTTP upload mode.' },
   { id: 'roi',     label: 'Face ROI extraction',   sub: 'MediaPipe landmark detection', detail: 'MediaPipe Face Mesh detects 468 facial landmarks. Skin-colored regions (forehead, cheeks, nose) are segmented as Regions of Interest for signal extraction.' },
   { id: 'pos',     label: 'POS algorithm',         sub: 'Plane-Orthogonal-to-Skin filtering', detail: 'The POS (Plane Orthogonal to Skin) algorithm by Wang et al. (2017) separates the pulse signal from RGB channel variations using chrominance-based filtering.' },
   { id: 'neural',  label: 'PhysFormer inference',  sub: 'Deep rPPG neural network', detail: 'PhysFormer, a vision transformer pretrained on UBFC-rPPG, processes spatiotemporal facial features to extract a blood volume pulse (BVP) signal with higher SNR.' },
@@ -103,7 +104,8 @@ export default function ProcessingScreen() {
   const router = useRouter();
   const { colors, accent } = useTheme();
   const params = useLocalSearchParams();
-  const videoUri = params.videoUri as string;
+  const videoUri = params.videoUri as string | undefined;
+  const streamResultJson = params.streamResultJson as string | undefined;
   const [stepStates, setStepStates] = useState<StepState[]>(STEPS.map(() => 'pending'));
   const [progress, setProgress] = useState(0);
   const progressAnim = useRef(new Animated.Value(0)).current;
@@ -111,10 +113,27 @@ export default function ProcessingScreen() {
   useEffect(() => { runPipeline(); }, []);
 
   const runPipeline = async () => {
+    const session = getScanSession();
     let result: any = null, apiDone = false;
-    processVideo(videoUri, (pct) => setProgress(pct))
-      .then(r => { result = r; apiDone = true; })
-      .catch(() => { setTimeout(() => { result = getMockResult(); apiDone = true; }, 2000); });
+    if (session.result) {
+      result = session.result;
+      apiDone = true;
+    } else if (streamResultJson) {
+      try {
+        result = JSON.parse(streamResultJson);
+        apiDone = true;
+      } catch {
+        result = getMockResult();
+        apiDone = true;
+      }
+    } else if (videoUri) {
+      processVideo(videoUri, (pct) => setProgress(pct))
+        .then(r => { result = r; apiDone = true; })
+        .catch(() => { setTimeout(() => { result = getMockResult(); apiDone = true; }, 2000); });
+    } else {
+      result = getMockResult();
+      apiDone = true;
+    }
 
     for (let i = 0; i < STEPS.length; i++) {
       setStepStates(prev => prev.map((s, idx) => idx === i ? 'active' : idx < i ? 'done' : 'pending'));
@@ -130,7 +149,8 @@ export default function ProcessingScreen() {
     setStepStates(STEPS.map(() => 'done'));
     await new Promise(res => setTimeout(res, 600));
     const finalResult = result ?? getMockResult();
-    router.replace({ pathname: '/results', params: { resultJson: JSON.stringify(finalResult), videoUri } });
+    setScanSession({ result: finalResult, videoUri: videoUri ?? session.videoUri });
+    router.replace({ pathname: '/results' });
   };
 
   const progressWidth = progressAnim.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] });

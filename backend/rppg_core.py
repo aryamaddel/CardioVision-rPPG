@@ -23,22 +23,6 @@ def bandpass_filter(signal_1d, fps, low_hz=LOW_HZ, high_hz=HIGH_HZ, order=4):
     return filtfilt(b, a, signal_1d)
 
 
-def bandpass_rgb(rgb, fps, low_hz=LOW_HZ, high_hz=HIGH_HZ, order=4):
-    """Apply bandpass filter to all 3 RGB channels independently."""
-    return np.stack(
-        [bandpass_filter(rgb[:, i], fps, low_hz, high_hz, order) for i in range(3)],
-        axis=1,
-    )
-
-
-def hr_band_power(sig, fps):
-    """Compute sum of squared FFT magnitudes in the heart rate band."""
-    fft = np.abs(np.fft.rfft(sig))
-    freqs = np.fft.rfftfreq(len(sig), d=1.0 / fps)
-    mask = (freqs >= LOW_HZ) & (freqs <= HIGH_HZ)
-    return np.sum(fft[mask] ** 2) if mask.any() else 0.0
-
-
 def spectral_peak_snr(sig, fps):
     """Ratio of peak FFT magnitude² to mean magnitude² in the HR band.
     Higher value = cleaner, sharper pulse peak."""
@@ -327,7 +311,11 @@ def compute_hrv_features(ibi_ms):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def process_rppg(rgb_raw, fps=30, motion_scores=None):
+def process_rppg(
+    rgb_raw: np.ndarray,
+    fps: float = 30.0,
+    motion_scores: np.ndarray | None = None,
+):
     """
     Orchestrates the entire signal processing pipeline from raw RGB to pulse results.
     Uses the POS algorithm (Wang et al., 2017).
@@ -370,3 +358,179 @@ def process_rppg(rgb_raw, fps=30, motion_scores=None):
         "n_frames": len(rgb_raw),
         "duration_sec": len(rgb_raw) / fps,
     }
+
+
+def _evaluate_pulse_candidate(
+    pulse: np.ndarray,
+    fps: float,
+    motion_fraction: float,
+    method_used: str,
+    n_frames: int,
+) -> dict:
+    """Score one pulse candidate using the same post-processing path as POS."""
+    pulse = remove_motion_artifacts(pulse, fps, method="savgol")
+    peaks_idx, ibi_ms, clean_pulse = extract_pulse_waveform(pulse, fps)
+    confidence, details, is_reliable = compute_confidence_score(clean_pulse, fps, ibi_ms)
+    hrv_features = compute_hrv_features(ibi_ms)
+    return {
+        "pulse_signal": clean_pulse,
+        "timestamps": np.arange(n_frames) / fps,
+        "fps": fps,
+        "peaks_idx": peaks_idx,
+        "ibi_ms": ibi_ms,
+        "confidence": confidence,
+        "is_reliable": is_reliable,
+        "confidence_details": details,
+        "hrv_features": hrv_features,
+        "motion_fraction": motion_fraction,
+        "method_used": method_used,
+        "n_frames": n_frames,
+        "duration_sec": n_frames / fps,
+    }
+
+
+def _bpm_from_ibi(ibi_ms: np.ndarray) -> float | None:
+    if ibi_ms.size == 0:
+        return None
+    return float(60000.0 / np.median(ibi_ms))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. DEEP MODEL FUSION (POS + Neural Network)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def fuse_pos_deep(
+    pulse_pos: np.ndarray,
+    pulse_deep: np.ndarray,
+    fps: float,
+    deep_available: bool,
+) -> tuple[np.ndarray, str]:
+    """
+    Fuse POS and deep model signals using frequency-domain SNR as the selector.
+
+    Strategy:
+    - Compute spectral_peak_snr for both signals
+    - If deep model SNR > POS SNR by > 20%: use deep model
+    - Otherwise: weighted average (POS * 0.4 + deep * 0.6) if both reliable
+    - Fallback: POS only
+
+    Returns:
+        (fused_signal, method_label)
+    """
+    if not deep_available or np.all(pulse_deep == 0):
+        return pulse_pos, "pos_only"
+
+    snr_pos  = spectral_peak_snr(pulse_pos,  fps)
+    snr_deep = spectral_peak_snr(pulse_deep, fps)
+
+    print(f"[fusion] SNR — POS: {snr_pos:.2f} | Deep: {snr_deep:.2f}")
+
+    if snr_deep > snr_pos * 1.20:
+        # Deep model clearly wins
+        return pulse_deep, "deep_model"
+    elif snr_pos > snr_deep * 1.20:
+        # POS clearly wins
+        return pulse_pos, "pos_only"
+    else:
+        # Similar quality — weighted ensemble (trust deep slightly more)
+        fused = 0.40 * pulse_pos + 0.60 * pulse_deep
+        return fused, "pos+deep_ensemble"
+
+
+def process_rppg_with_deep(
+    rgb_raw: np.ndarray,
+    fps: float = 30.0,
+    face_frames: np.ndarray | None = None,
+    motion_scores: np.ndarray | None = None,
+    selection_mode: str = "best_confidence",
+) -> dict:
+    """
+    Full pipeline: POS + optional deep model fusion.
+
+    Args:
+        rgb_raw:      (N, 3) mean RGB per frame from ROI
+        fps:          frames per second
+        face_frames:  (N, H, W, 3) BGR face crops — required for deep model
+                      If None, deep model is skipped
+        motion_scores: optional motion quality array from Member 1
+
+    Returns:
+        Same dict as process_rppg() but with extra 'deep_model_used' key
+    """
+    from deep_rppg import extract_bvp_deep, is_deep_model_available
+
+    # POS runs first so the app can display an estimate quickly.
+    pos_result = process_rppg(rgb_raw, fps=fps, motion_scores=motion_scores)
+    pulse_pos = pos_result["pulse_signal"]
+
+    deep_available = False
+    pulse_deep = np.zeros_like(pulse_pos)
+    deep_model_name = "none"
+
+    if face_frames is not None and is_deep_model_available():
+        try:
+            pulse_deep, deep_model_name = extract_bvp_deep(face_frames, fps)
+            pulse_deep = bandpass_filter(pulse_deep, fps)
+            deep_available = not np.all(pulse_deep == 0)
+        except Exception as e:
+            print(f"[rppg_core] Deep model error: {e}")
+
+    deep_result = None
+    if deep_available:
+        deep_result = _evaluate_pulse_candidate(
+            pulse=pulse_deep,
+            fps=fps,
+            motion_fraction=float(pos_result["motion_fraction"]),
+            method_used="deep_model",
+            n_frames=len(rgb_raw),
+        )
+
+    result = pos_result.copy()
+    selected = "pos"
+    if deep_result is not None:
+        if selection_mode == "fuse":
+            fused_pulse, fusion_method = fuse_pos_deep(pulse_pos, pulse_deep, fps, True)
+            fused_result = _evaluate_pulse_candidate(
+                pulse=fused_pulse,
+                fps=fps,
+                motion_fraction=float(pos_result["motion_fraction"]),
+                method_used=fusion_method,
+                n_frames=len(rgb_raw),
+            )
+            result = fused_result
+            selected = fusion_method
+        else:
+            if float(deep_result["confidence"]) > float(pos_result["confidence"]):
+                result = deep_result
+                selected = "deep_model"
+
+    result.update(
+        {
+            "deep_model_used": deep_model_name,
+            "selected_source": selected,
+            "selection_mode": selection_mode,
+            "pos_confidence": float(pos_result["confidence"]),
+            "deep_confidence": float(deep_result["confidence"]) if deep_result else 0.0,
+            "pos_snr": spectral_peak_snr(pulse_pos, fps),
+            "deep_snr": spectral_peak_snr(pulse_deep, fps) if deep_available else 0.0,
+        }
+    )
+
+    pos_bpm = _bpm_from_ibi(pos_result["ibi_ms"])
+    deep_bpm = _bpm_from_ibi(deep_result["ibi_ms"]) if deep_result else None
+    agreement_ok = True
+    if pos_bpm is not None and deep_bpm is not None:
+        agreement_ok = abs(pos_bpm - deep_bpm) <= 18.0
+
+    confidence_ok = float(result["confidence"]) >= 0.50
+    reliability_ok = bool(result["is_reliable"])
+    result["is_reliable"] = bool(reliability_ok and confidence_ok and agreement_ok)
+    result["guardrails"] = {
+        "confidence_ok": confidence_ok,
+        "agreement_ok": agreement_ok,
+        "pos_bpm": pos_bpm,
+        "deep_bpm": deep_bpm,
+    }
+
+    return result

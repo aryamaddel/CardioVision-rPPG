@@ -8,6 +8,7 @@ import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, Typography, Spacing, Radius, Shadows, HealthTipsData } from '../src/theme';
 import type { RPPGResult } from '../src/api/rppgService';
+import { clearScanSession, getScanSession } from '../src/state/scanSession';
 
 const { width } = Dimensions.get('window');
 
@@ -122,14 +123,25 @@ export default function ResultsScreen() {
   const router = useRouter();
   const { colors, accent, isDark, toggle } = useTheme();
   const params = useLocalSearchParams();
+  const session = getScanSession();
 
   let result: RPPGResult;
-  try { result = JSON.parse(params.resultJson as string); } catch { result = {} as any; }
+  try {
+    if (typeof params.resultJson === 'string' && params.resultJson.length > 0) {
+      result = JSON.parse(params.resultJson as string);
+    } else {
+      result = (session.result ?? {}) as RPPGResult;
+    }
+  } catch {
+    result = (session.result ?? {}) as RPPGResult;
+  }
 
   const hrv = result.hrv_features ?? {} as any;
   const ibi = result.ibi_ms ?? [];
   const bpm = result.bpm ?? (ibi.length ? Math.round(60000 / (ibi.reduce((a: number, b: number) => a + b, 0) / ibi.length)) : null);
   const conf = result.confidence ?? 0;
+  const isFailed = result.status === 'failed';
+  const failReason = (result as any).reason as string | undefined;
   const stress = hrv.stress_level ?? 'Unknown';
   const sdnn = hrv.sdnn_ms ?? null;
   const rmssd = hrv.rmssd_ms ?? null;
@@ -164,6 +176,13 @@ export default function ResultsScreen() {
         </View>
 
         <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+
+          {isFailed && (
+            <View style={[styles.failBanner, { backgroundColor: '#7F1D1D', borderColor: '#FCA5A5' }]}> 
+              <Text style={styles.failTitle}>Signal Could Not Be Computed</Text>
+              <Text style={styles.failBody}>{failReason ?? 'Insufficient valid face frames. Keep face centered and well-lit.'}</Text>
+            </View>
+          )}
 
           {/* Hero BPM */}
           <View style={styles.heroBPM}>
@@ -270,7 +289,14 @@ export default function ResultsScreen() {
           </TouchableOpacity>
 
           {/* Scan Again */}
-          <TouchableOpacity style={[styles.rescanBtn, { borderColor: accent.primary }]} onPress={() => router.push('/record')} activeOpacity={0.8}>
+          <TouchableOpacity
+            style={[styles.rescanBtn, { borderColor: accent.primary }]}
+            onPress={() => {
+              clearScanSession();
+              router.push('/record');
+            }}
+            activeOpacity={0.8}
+          >
             <Ionicons name="refresh-outline" size={18} color={accent.primary} style={{ marginRight: 8 }} />
             <Text style={[styles.rescanText, { color: accent.primary }]}>Scan Again</Text>
           </TouchableOpacity>
@@ -360,4 +386,7 @@ const styles = StyleSheet.create({
   rescanBtn: { borderRadius: Radius.lg, borderWidth: 1.5, padding: Spacing.md, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: Spacing.md },
   rescanText: { fontFamily: 'SpaceGrotesk-SemiBold', fontSize: 16 },
   disclaimer: { ...Typography.label, textAlign: 'center', lineHeight: 18, paddingBottom: Spacing.xl },
+  failBanner: { borderWidth: 1, borderRadius: Radius.md, padding: Spacing.md, marginTop: Spacing.md, marginBottom: Spacing.sm },
+  failTitle: { fontFamily: 'SpaceGrotesk-Bold', fontSize: 14, color: '#FEE2E2', marginBottom: 4 },
+  failBody: { ...Typography.bodySmall, color: '#FECACA' },
 });

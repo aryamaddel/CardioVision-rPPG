@@ -1,7 +1,23 @@
 // src/api/rppgService.ts
 import axios from 'axios';
+import Constants from 'expo-constants';
 
-const BASE_URL = 'http://192.168.1.100:5000'; // ← UPDATE to your IP
+function detectExpoHost(): string | null {
+  const c = Constants as any;
+  const hostUri: string | undefined =
+    c?.expoConfig?.hostUri ??
+    c?.manifest2?.extra?.expoClient?.hostUri ??
+    c?.manifest?.debuggerHost;
+
+  if (!hostUri || typeof hostUri !== 'string') return null;
+  return hostUri.split(':')[0] ?? null;
+}
+
+const DEFAULT_HOST = detectExpoHost() ?? '127.0.0.1';
+const BASE_URL = process.env.EXPO_PUBLIC_BASE_URL ?? `http://${DEFAULT_HOST}:5000`;
+const BACKEND_HOST =
+  process.env.EXPO_PUBLIC_BACKEND_HOST ?? BASE_URL.replace(/^https?:\/\//, '').split(':')[0];
+const WS_URL = process.env.EXPO_PUBLIC_WS_URL ?? `ws://${BACKEND_HOST}:8765`;
 
 const api = axios.create({ baseURL: BASE_URL, timeout: 120_000 });
 
@@ -47,6 +63,148 @@ export interface RPPGResult {
   frames_processed: number;
   n_frames: number;
   status: string;
+}
+
+export interface LiveMetric {
+  bpm: number | null;
+  confidence: number;
+  method: string;
+}
+
+export interface LiveFrameResult {
+  type: 'frame_result';
+  metric: LiveMetric;
+  has_face: boolean;
+  method_changed: boolean;
+  overlay_jpeg_b64: string | null;
+}
+
+type LiveSocketMessage =
+  | LiveFrameResult
+  | { type: 'ack'; status: string }
+  | { type: 'final_result'; result: RPPGResult }
+  | { type: 'error'; message: string }
+  | { type: 'pong' };
+
+interface LiveClientOptions {
+  onFrame?: (frame: LiveFrameResult) => void;
+  onFinal?: (result: RPPGResult) => void;
+  onError?: (message: string) => void;
+  onClose?: () => void;
+}
+
+export class LiveRPPGClient {
+  private ws: WebSocket | null = null;
+  private readonly options: LiveClientOptions;
+  private isOpen = false;
+  private finalResolver: ((result: RPPGResult) => void) | null = null;
+  private finalRejecter: ((reason?: unknown) => void) | null = null;
+
+  constructor(options: LiveClientOptions = {}) {
+    this.options = options;
+  }
+
+  connect(timeoutMs: number = 4000): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(WS_URL);
+      this.ws = ws;
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        try { ws.close(); } catch {}
+        reject(new Error('Live stream connection timed out'));
+      }, timeoutMs);
+
+      ws.onopen = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.isOpen = true;
+        ws.send(JSON.stringify({ type: 'start', client: 'expo_mobile' }));
+        resolve();
+      };
+
+      ws.onerror = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        const msg = `Live stream connection failed (${WS_URL})`;
+        this.options.onError?.(msg);
+        reject(new Error(msg));
+      };
+
+      ws.onclose = () => {
+        clearTimeout(timer);
+        this.isOpen = false;
+        this.options.onClose?.();
+      };
+
+      ws.onmessage = (event) => {
+        const parsed = this.parseMessage(event.data);
+        if (!parsed) return;
+
+        if (parsed.type === 'frame_result') {
+          this.options.onFrame?.(parsed);
+          return;
+        }
+
+        if (parsed.type === 'final_result') {
+          this.options.onFinal?.(parsed.result);
+          this.finalResolver?.(parsed.result);
+          this.finalResolver = null;
+          this.finalRejecter = null;
+          return;
+        }
+
+        if (parsed.type === 'error') {
+          this.options.onError?.(parsed.message);
+          this.finalRejecter?.(new Error(parsed.message));
+          this.finalResolver = null;
+          this.finalRejecter = null;
+        }
+      };
+    });
+  }
+
+  sendFrameBase64(frameJpegB64: string, tsMs?: number): boolean {
+    if (!this.ws || !this.isOpen) return false;
+    this.ws.send(JSON.stringify({ type: 'frame', frame_jpeg_b64: frameJpegB64, ts_ms: tsMs ?? Date.now() }));
+    return true;
+  }
+
+  stopAndGetFinalResult(timeoutMs: number = 15000): Promise<RPPGResult> {
+    if (!this.ws || !this.isOpen) {
+      return Promise.reject(new Error('Live socket is not connected'));
+    }
+
+    return new Promise<RPPGResult>((resolve, reject) => {
+      this.finalResolver = resolve;
+      this.finalRejecter = reject;
+
+      this.ws?.send(JSON.stringify({ type: 'stop' }));
+      setTimeout(() => {
+        if (!this.finalResolver) return;
+        this.finalResolver = null;
+        this.finalRejecter = null;
+        reject(new Error('Timed out waiting for final stream result'));
+      }, timeoutMs);
+    });
+  }
+
+  disconnect() {
+    this.isOpen = false;
+    this.ws?.close();
+    this.ws = null;
+  }
+
+  private parseMessage(data: string): LiveSocketMessage | null {
+    try {
+      return JSON.parse(data) as LiveSocketMessage;
+    } catch {
+      return null;
+    }
+  }
 }
 
 export async function processVideo(

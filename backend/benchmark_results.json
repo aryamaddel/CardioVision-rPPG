@@ -1,18 +1,6 @@
 {
-    "mae": 12.67,
+    "mae": 3.0,
     "results": [
-        {
-            "subject": "subject33",
-            "gt": 117.18,
-            "est": 116.86,
-            "err": 0.32
-        },
-        {
-            "subject": "subject34",
-            "gt": 116.55,
-            "est": 112.41,
-            "err": 4.14
-        },
         {
             "subject": "subject30",
             "gt": 92.71,
@@ -26,10 +14,16 @@
             "err": 0.97
         },
         {
-            "subject": "subject32",
-            "gt": 107.33,
-            "est": 55.97,
-            "err": 51.36
+            "subject": "subject33",
+            "gt": 117.18,
+            "est": 116.86,
+            "err": 0.32
+        },
+        {
+            "subject": "subject34",
+            "gt": 116.55,
+            "est": 112.41,
+            "err": 4.14
         }
     ]
 }

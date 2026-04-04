@@ -7,8 +7,8 @@ import cv2
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from main import FaceROIExtractor, get_mean_rgb, ROI_WEIGHTS, ROI_COLORS
-from rppg_core import process_rppg
+from roi_pipeline import FaceROIExtractor, ROI_COLORS, get_mean_rgb
+from rppg_core import process_rppg_with_deep
 
 
 def load_gt_bpm(gt_path):
@@ -30,9 +30,10 @@ def evaluate(subject_dir, preview=False, verbose=True):
     cap = cv2.VideoCapture(str(video_path))
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    roi_ext = FaceROIExtractor("face_landmarker.task", 0.5, 0.5)
+    roi_ext = FaceROIExtractor("face_landmarker.task")
     
     idx, frame_data = 0, []
+    frame_data_crops = []
     pbar = None
     if verbose:
         pbar = tqdm(total=total_frames, desc=f"  {subject_dir.name}", leave=False)
@@ -45,18 +46,16 @@ def evaluate(subject_dir, preview=False, verbose=True):
         res = roi_ext.process(frame, int((idx / fps) * 1000))
         
         if res:
-            # Cut out everything except the face (use copy to avoid corrupting original)
             if res.face_mask is not None:
                 frame = frame.copy()
                 frame[res.face_mask == 0] = 0
 
-            rgb = [0.0, 0.0, 0.0]
-            for r, w in ROI_WEIGHTS.items():
-                m_rgb = get_mean_rgb(frame, res.masks[r])
-                if not np.isnan(m_rgb[1]):
-                    rgb = [rgb[i] + w * m_rgb[i] for i in range(3)]
+            rgb = get_mean_rgb(frame, res.masks["face"])
             
             frame_data.append({"idx": idx, "ts": idx / fps, "r": rgb[0], "g": rgb[1], "b": rgb[2]})
+
+            if "face" in res.crops:
+                frame_data_crops.append(res.crops["face"])
 
             if preview:
                 vis = frame.copy()
@@ -82,7 +81,7 @@ def evaluate(subject_dir, preview=False, verbose=True):
                 
                 cv2.imshow("Benchmark Preview", vis)
                 if cv2.waitKey(1) & 0xFF == ord("q"):
-                    preview = False # Stop previewing but keep processing
+                    preview = False
                     cv2.destroyWindow("Benchmark Preview")
 
         idx += 1
@@ -101,8 +100,19 @@ def evaluate(subject_dir, preview=False, verbose=True):
 
     df = pd.DataFrame(frame_data)
     rgb_arr = df[["r", "g", "b"]].values
-    actual_fps = 1.0 / np.mean(np.diff(df["ts"].values)) if len(df) > 1 else fps
-    res_rppg = process_rppg(rgb_arr, fps=actual_fps)
+    ts_values = np.asarray(df["ts"].to_numpy(), dtype=np.float64)
+    actual_fps = (
+        float(1.0 / np.mean(np.diff(ts_values))) if len(ts_values) > 1 else float(fps)
+    )
+    face_frames_arr = np.array(frame_data_crops, dtype=np.uint8) if frame_data_crops else None
+    if face_frames_arr is None:
+        res_rppg = process_rppg_with_deep(rgb_arr, fps=actual_fps)
+    else:
+        res_rppg = process_rppg_with_deep(
+            rgb_arr,
+            fps=actual_fps,
+            face_frames=face_frames_arr,
+        )
     est_bpm = 60000.0 / np.median(res_rppg["ibi_ms"]) if res_rppg["ibi_ms"].size > 0 else None
     
     return (
@@ -123,13 +133,13 @@ def main():
     parser.add_argument("--jobs", type=int, default=1, help="Number of parallel processes (default: 1)")
     args = parser.parse_args()
 
-    subjects = sorted([d for d in Path("test_video").iterdir() if d.is_dir()])
+    test_video_dir = Path(__file__).with_name("test_video")
+    subjects = sorted([d for d in test_video_dir.iterdir() if d.is_dir()])
     report = {}
     
     print("--- Running Benchmark (POS) ---")
     results = []
     
-    # Force single process if preview is enabled
     use_parallel = args.jobs > 1 and not args.preview
     if args.jobs > 1 and args.preview:
         print("Warning: Live preview enabled. Forcing sequential processing (jobs=1).")
@@ -138,14 +148,12 @@ def main():
     if use_parallel:
         with ProcessPoolExecutor(max_workers=args.jobs) as executor:
             futures = {executor.submit(evaluate, s, preview=False, verbose=False): s for s in subjects}
-            # Overall progress bar for parallel execution
             for future in tqdm(as_completed(futures), total=len(subjects), desc="Processing"):
                 r = future.result()
                 if r:
                     results.append(r)
                     print(f"    {r['subject']}: GT={r['gt']}, Est={r['est']}, Err={r['err']}")
     else:
-        # Sequential execution with detailed progress bar
         for s in subjects:
             r = evaluate(s, preview=args.preview, verbose=True)
             if r:
