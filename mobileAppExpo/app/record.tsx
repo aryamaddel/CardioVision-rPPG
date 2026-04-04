@@ -99,13 +99,17 @@ export default function RecordScreen() {
   const [quality, setQuality] = useState(0);
   const [liveBpm, setLiveBpm] = useState<number | null>(null);
   const [liveMethod, setLiveMethod] = useState('pending');
+  const [isTimerPaused, setIsTimerPaused] = useState(false);
+  const [pauseReason, setPauseReason] = useState<'none' | 'face_lost' | 'unknown_person'>('none');
   const [overlayJpeg, setOverlayJpeg] = useState<string | null>(null);
   const [snack, setSnack] = useState({ msg: '', show: false, key: 0 });
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const framePumpRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const liveClientRef = useRef<LiveRPPGClient | null>(null);
+  const intruderStopTriggeredRef = useRef(false);
   const fallbackVideoPromiseRef = useRef<Promise<{ uri: string } | null> | null>(null);
   const usingLiveStreamRef = useRef(false);
+  const pausedRef = useRef(false);
   const qualityAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => { if (!permission?.granted) requestPermission(); }, []);
@@ -147,8 +151,29 @@ export default function RecordScreen() {
           setLiveBpm(frame.metric.bpm ?? null);
           setLiveMethod(frame.metric.method ?? 'pending');
           // No overlay display needed — we use SVG ROI highlights instead.
+          if (frame.intruder_detected || (frame.identity_locked && !frame.identity_match)) {
+            setIsTimerPaused(true);
+            pausedRef.current = true;
+            setPauseReason('unknown_person');
+            setSnack({ msg: 'Unknown person seen. Waiting for original person to return.', show: true, key: Date.now() });
+            return;
+          }
+
           if (!frame.has_face) {
-            setSnack({ msg: 'Face not detected. Keep your face inside the oval.', show: true, key: Date.now() });
+            if (frame.identity_locked) {
+              setIsTimerPaused(true);
+              pausedRef.current = true;
+              setPauseReason('face_lost');
+              setSnack({ msg: 'Primary face lost. Timer paused until face is back.', show: true, key: Date.now() });
+            }
+            return;
+          }
+
+          if (pausedRef.current) {
+            setIsTimerPaused(false);
+            pausedRef.current = false;
+            setPauseReason('none');
+            setSnack({ msg: 'Primary face reacquired. Timer resumed.', show: true, key: Date.now() });
           }
         },
       });
@@ -163,9 +188,14 @@ export default function RecordScreen() {
     }
 
     setIsRecording(true); setTimeLeft(RECORD_DURATION); setQuality(0); setLiveBpm(null); setLiveMethod('pending'); setOverlayJpeg(null);
+    setIsTimerPaused(false); setPauseReason('none'); pausedRef.current = false;
+    intruderStopTriggeredRef.current = false;
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     let elapsed = 0;
     timerRef.current = setInterval(() => {
+      if (pausedRef.current) {
+        return;
+      }
       elapsed++; setTimeLeft(RECORD_DURATION - elapsed); setProgress(elapsed / RECORD_DURATION);
       if (elapsed >= RECORD_DURATION) stopRecording();
     }, 1000);
@@ -267,8 +297,11 @@ export default function RecordScreen() {
     liveClientRef.current = null;
     fallbackVideoPromiseRef.current = null;
     usingLiveStreamRef.current = false;
+    pausedRef.current = false;
+    intruderStopTriggeredRef.current = false;
     setIsRecording(false); setCountdown3(false); setTimeLeft(RECORD_DURATION); setProgress(0);
     setQuality(0); setLiveBpm(null); setLiveMethod('pending'); setOverlayJpeg(null);
+    setIsTimerPaused(false); setPauseReason('none');
   };
 
   if (!permission?.granted) {
@@ -323,6 +356,11 @@ export default function RecordScreen() {
             <Text style={styles.bpmNum}>{liveBpm !== null ? Math.round(liveBpm) : '--'}</Text>
             <Text style={styles.bpmLabel}>BPM</Text>
             <Text style={styles.instructText}>Stay still. Method: {liveMethod.toUpperCase()}</Text>
+            {isTimerPaused && (
+              <Text style={[styles.pauseStatus, pauseReason === 'unknown_person' ? styles.pauseStatusWarn : null]}>
+                {pauseReason === 'unknown_person' ? 'Paused: unknown person detected' : 'Paused: primary face not detected'}
+              </Text>
+            )}
           </View>
         )}
 
@@ -418,6 +456,19 @@ const styles = StyleSheet.create({
   bpmOverlay: { alignItems: 'center', marginTop: Spacing.lg },
   bpmNum: { fontFamily: 'SpaceGrotesk-Bold', fontSize: 64, color: '#FFF', letterSpacing: -2 },
   bpmLabel: { fontFamily: 'SpaceGrotesk-Medium', fontSize: 16, color: 'rgba(255,255,255,0.5)', marginTop: -6 },
+  pauseStatus: {
+    marginTop: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    color: '#FFFFFF',
+    fontFamily: 'SpaceGrotesk-Medium',
+    fontSize: 12,
+  },
+  pauseStatusWarn: {
+    backgroundColor: 'rgba(239,68,68,0.28)',
+  },
   instructBarTop: { alignItems: 'center', marginTop: Spacing.md },
   instructText: { fontFamily: 'SpaceGrotesk-Regular', fontSize: 14, color: 'rgba(255,255,255,0.6)', textAlign: 'center' },
 

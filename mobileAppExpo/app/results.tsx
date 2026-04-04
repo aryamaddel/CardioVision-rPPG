@@ -224,6 +224,10 @@ export default function ResultsScreen() {
   const conf = result.confidence ?? 0;
   const isFailed = result.status === 'failed';
   const failReason = (result as any).reason as string | undefined;
+  const failReasonText =
+    failReason === 'identity_mismatch_detected'
+      ? 'Session interrupted: a different person was detected. Restart and keep the same person in frame for the full scan.'
+      : (failReason ?? 'Insufficient valid face frames. Keep face centered and well-lit.');
   const stress = hrv.stress_level ?? 'Unknown';
   const sdnn = hrv.sdnn_ms ?? null;
   const rmssd = hrv.rmssd_ms ?? null;
@@ -298,7 +302,7 @@ export default function ResultsScreen() {
           {isFailed && (
             <View style={[styles.failBanner, { backgroundColor: '#7F1D1D', borderColor: '#FCA5A5' }]}> 
               <Text style={styles.failTitle}>Signal Could Not Be Computed</Text>
-              <Text style={styles.failBody}>{failReason ?? 'Insufficient valid face frames. Keep face centered and well-lit.'}</Text>
+              <Text style={styles.failBody}>{failReasonText}</Text>
             </View>
           )}
 

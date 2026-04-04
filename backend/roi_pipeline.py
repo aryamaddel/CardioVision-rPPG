@@ -64,6 +64,7 @@ class ROIResult:
     frame_idx: int
     crops: Dict[str, np.ndarray]
     face_mask: Optional[np.ndarray] = None
+    landmarks: Optional[np.ndarray] = None
 
 
 class VideoSource:
@@ -204,7 +205,15 @@ class FaceROIExtractor:
             else:
                 crops[roi_name] = np.zeros((64, 64, 3), dtype=np.uint8)
 
-        return ROIResult(masks, px_counts, bbox, self.count - 1, crops, face_mask)
+        return ROIResult(
+            masks,
+            px_counts,
+            bbox,
+            self.count - 1,
+            crops,
+            face_mask,
+            lm,
+        )
 
     def close(self):
         self.detector.close()

@@ -76,6 +76,9 @@ export interface LiveFrameResult {
   metric: LiveMetric;
   has_face: boolean;
   method_changed: boolean;
+  identity_locked: boolean;
+  identity_match: boolean;
+  intruder_detected: boolean;
   overlay_jpeg_b64: string | null;
 }
 

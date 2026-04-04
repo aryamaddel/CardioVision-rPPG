@@ -203,6 +203,9 @@ async def _send_frame_result(
         },
         "has_face": out["has_face"],
         "method_changed": out["method_changed"],
+        "identity_locked": out.get("identity_locked", False),
+        "identity_match": out.get("identity_match", True),
+        "intruder_detected": out.get("intruder_detected", False),
         "overlay_jpeg_b64": jpeg_b64,
     }
     await websocket.send(json.dumps(response))

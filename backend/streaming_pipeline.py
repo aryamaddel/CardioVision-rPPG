@@ -18,6 +18,7 @@ from triage_agent import TriageAgent
 
 
 MIN_DISPLAY_CONFIDENCE = 0.40
+IDENTITY_SIGNATURE_POINTS = [10, 152, 33, 263, 1, 61, 291]
 
 
 @dataclass
@@ -77,6 +78,14 @@ class RealtimeRPPGPipeline:
 
         self.current_metric = StreamMetric(bpm=None, confidence=0.0, method="pending")
         self.triage_agent = TriageAgent()
+        self.identity_signature_ref: Optional[np.ndarray] = None
+        self.identity_signature_buffer: List[np.ndarray] = []
+        self.identity_lock_warmup = 5
+        self.identity_dist_threshold = 0.18
+        self.identity_mismatch_streak = 0
+        self.identity_mismatch_tolerance = 3
+        self.identity_violation_detected = False
+        self.identity_last_match = True
 
     def close(self):
         if self.deep_future and not self.deep_future.done():
@@ -91,6 +100,11 @@ class RealtimeRPPGPipeline:
         self.frame_idx = 0
         self.invalid_streak = 0
         self.current_metric = StreamMetric(bpm=None, confidence=0.0, method="pending")
+        self.identity_signature_ref = None
+        self.identity_signature_buffer.clear()
+        self.identity_mismatch_streak = 0
+        self.identity_violation_detected = False
+        self.identity_last_match = True
         if self.deep_future and not self.deep_future.done():
             self.deep_future.cancel()
         self.deep_future = None
@@ -106,6 +120,9 @@ class RealtimeRPPGPipeline:
                 "metric": self.current_metric,
                 "has_face": False,
                 "method_changed": False,
+                "identity_locked": self.identity_signature_ref is not None,
+                "identity_match": True,
+                "intruder_detected": False,
             }
 
         overlay = overlay_roi(frame_bgr, roi_res.masks)
@@ -120,6 +137,25 @@ class RealtimeRPPGPipeline:
                 "metric": self.current_metric,
                 "has_face": True,
                 "method_changed": False,
+                "identity_locked": self.identity_signature_ref is not None,
+                "identity_match": True,
+                "intruder_detected": False,
+            }
+
+        frame_accepted, identity_match, intruder_detected = self._check_identity(roi_res)
+        if not frame_accepted:
+            self.invalid_streak += 1
+            self._maybe_reset_metric_on_invalid_streak()
+            self.frame_idx += 1
+            warned_overlay = self._render_intruder_warning(overlay)
+            return {
+                "overlay": warned_overlay,
+                "metric": self.current_metric,
+                "has_face": True,
+                "method_changed": False,
+                "identity_locked": self.identity_signature_ref is not None,
+                "identity_match": identity_match,
+                "intruder_detected": intruder_detected,
             }
 
         r, g, b = get_mean_rgb(frame_bgr, roi_res.masks["face"])
@@ -152,9 +188,22 @@ class RealtimeRPPGPipeline:
             "metric": self.current_metric,
             "has_face": True,
             "method_changed": method_changed,
+            "identity_locked": self.identity_signature_ref is not None,
+            "identity_match": True,
+            "intruder_detected": False,
         }
 
     def finalize(self) -> Dict[str, Any]:
+        if self.identity_violation_detected:
+            return {
+                "status": "failed",
+                "reason": "identity_mismatch_detected",
+                "frames_processed": len(self.rgb_samples),
+                "n_frames": len(self.rgb_samples),
+                "duration_sec": float(len(self.rgb_samples) / max(self._effective_fps(), 1e-6)),
+                "fps": float(self._effective_fps()),
+            }
+
         effective_fps = self._effective_fps()
         min_required = max(12, int(effective_fps * 4.0))
         if len(self.rgb_samples) < min_required:
@@ -295,3 +344,68 @@ class RealtimeRPPGPipeline:
 
         # Clamp to a practical range for mobile snapshot streaming.
         return float(np.clip(1.0 / median_dt, 2.0, self.max_effective_fps))
+
+    def _check_identity(self, roi_res) -> tuple[bool, bool, bool]:
+        signature = self._compute_face_signature(roi_res)
+        if signature is None:
+            self.identity_last_match = True
+            return True, True, False
+
+        if self.identity_signature_ref is None:
+            self.identity_signature_buffer.append(signature)
+            if len(self.identity_signature_buffer) >= self.identity_lock_warmup:
+                stacked = np.asarray(self.identity_signature_buffer, dtype=np.float64)
+                self.identity_signature_ref = np.median(stacked, axis=0)
+                self.identity_signature_buffer.clear()
+            self.identity_last_match = True
+            return True, True, False
+
+        dist = float(np.linalg.norm(signature - self.identity_signature_ref))
+        if dist <= self.identity_dist_threshold:
+            self.identity_mismatch_streak = 0
+            self.identity_last_match = True
+            return True, True, False
+
+        self.identity_mismatch_streak += 1
+        self.identity_last_match = False
+        if self.identity_mismatch_streak >= self.identity_mismatch_tolerance:
+            self.identity_violation_detected = True
+            return False, False, True
+
+        # Reject this frame immediately to avoid mixing different-person signal,
+        # while waiting for repeated evidence before invalidating the whole session.
+        return False, False, True
+
+    def _compute_face_signature(self, roi_res) -> Optional[np.ndarray]:
+        lm = getattr(roi_res, "landmarks", None)
+        if lm is None:
+            return None
+
+        x, y, w, h = roi_res.face_bbox
+        if w <= 0 or h <= 0:
+            return None
+
+        idx = np.asarray(IDENTITY_SIGNATURE_POINTS, dtype=np.int32)
+        if int(idx.max()) >= lm.shape[0]:
+            return None
+
+        pts = lm[idx].astype(np.float64)
+        center = np.array([x + (w * 0.5), y + (h * 0.5)], dtype=np.float64)
+        scale = max(float(w), float(h), 1.0)
+        normalized = (pts - center) / scale
+        return normalized.reshape(-1)
+
+    def _render_intruder_warning(self, overlay: np.ndarray) -> np.ndarray:
+        vis = overlay.copy()
+        cv2.rectangle(vis, (8, 8), (vis.shape[1] - 8, 48), (0, 0, 255), -1)
+        cv2.putText(
+            vis,
+            "Different person detected - ignoring frame",
+            (16, 35),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
+        return vis
