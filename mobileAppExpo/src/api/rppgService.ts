@@ -91,6 +91,9 @@ interface LiveClientOptions {
   onFinal?: (result: RPPGResult) => void;
   onError?: (message: string) => void;
   onClose?: () => void;
+  overlayQuality?: number;
+  overlayMaxSide?: number;
+  overlayStride?: number;
 }
 
 export class LiveRPPGClient {
@@ -121,7 +124,15 @@ export class LiveRPPGClient {
         settled = true;
         clearTimeout(timer);
         this.isOpen = true;
-        ws.send(JSON.stringify({ type: 'start', client: 'expo_mobile' }));
+        ws.send(
+          JSON.stringify({
+            type: 'start',
+            client: 'expo_mobile',
+            overlay_quality: Math.max(1, Math.min(100, Math.round(this.options.overlayQuality ?? 45))),
+            overlay_max_side: Math.max(0, Math.round(this.options.overlayMaxSide ?? 320)),
+            overlay_stride: Math.max(1, Math.round(this.options.overlayStride ?? 2)),
+          }),
+        );
         resolve();
       };
 

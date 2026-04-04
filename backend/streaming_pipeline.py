@@ -46,11 +46,21 @@ class RealtimeRPPGPipeline:
         pos_min_frames: int = 150,
         deep_min_frames: int = 240,
         update_stride: int = 30,
+        live_deep_enabled: bool = False,
+        final_deep_enabled: bool = True,
+        live_pos_window_sec: float = 12.0,
+        deep_max_frames: int = 300,
+        max_effective_fps: float = 120.0,
     ):
         self.fps = float(fps)
         self.pos_min_frames = int(pos_min_frames)
         self.deep_min_frames = int(deep_min_frames)
         self.update_stride = max(1, int(update_stride))
+        self.live_deep_enabled = bool(live_deep_enabled)
+        self.final_deep_enabled = bool(final_deep_enabled)
+        self.live_pos_window_sec = max(4.0, float(live_pos_window_sec))
+        self.deep_max_frames = max(60, int(deep_max_frames))
+        self.max_effective_fps = max(30.0, float(max_effective_fps))
         self.pos_min_seconds = max(2.0, self.pos_min_frames / max(self.fps, 1e-6))
         self.deep_min_seconds = max(4.0, self.deep_min_frames / max(self.fps, 1e-6))
         self.update_interval_seconds = max(0.5, self.update_stride / max(self.fps, 1e-6))
@@ -129,7 +139,7 @@ class RealtimeRPPGPipeline:
         if n >= required_pos_frames and (self.frame_idx % dynamic_stride == 0):
             self._update_pos_metric(effective_fps)
 
-        if n >= required_deep_frames:
+        if self.live_deep_enabled and n >= required_deep_frames:
             self._maybe_start_deep_job(effective_fps)
             method_changed = self._maybe_collect_deep_result()
 
@@ -156,13 +166,32 @@ class RealtimeRPPGPipeline:
 
         rgb = np.asarray(self.rgb_samples, dtype=np.float64)
         faces = np.asarray(self.face_frames, dtype=np.uint8) if self.face_frames else None
-        result = process_rppg_with_deep(
-            rgb,
-            fps=effective_fps,
-            face_frames=faces,
-            motion_scores=None,
-            selection_mode="best_confidence",
-        )
+        if self.final_deep_enabled:
+            result = process_rppg_with_deep(
+                rgb,
+                fps=effective_fps,
+                face_frames=faces,
+                motion_scores=None,
+                selection_mode="best_confidence",
+                deep_max_frames=self.deep_max_frames,
+            )
+        else:
+            result = process_rppg(
+                rgb,
+                fps=effective_fps,
+                motion_scores=None,
+            )
+            result.update(
+                {
+                    "deep_model_used": "disabled",
+                    "selected_source": "pos",
+                    "selection_mode": "off",
+                    "pos_confidence": float(result["confidence"]),
+                    "deep_confidence": 0.0,
+                    "pos_snr": 0.0,
+                    "deep_snr": 0.0,
+                }
+            )
 
         ibi_ms = np.asarray(result.get("ibi_ms", np.array([])), dtype=np.float64)
         result["bpm"] = float(60000.0 / np.median(ibi_ms)) if ibi_ms.size > 0 else None
@@ -178,7 +207,8 @@ class RealtimeRPPGPipeline:
         return result
 
     def _update_pos_metric(self, effective_fps: float):
-        rgb = np.asarray(self.rgb_samples, dtype=np.float64)
+        window_frames = max(24, int(round(effective_fps * self.live_pos_window_sec)))
+        rgb = np.asarray(self.rgb_samples[-window_frames:], dtype=np.float64)
         result = process_rppg(rgb, fps=effective_fps)
         confidence = float(result["confidence"])
         reliable = bool(result.get("is_reliable", False))
@@ -261,4 +291,4 @@ class RealtimeRPPGPipeline:
             return float(self.fps)
 
         # Clamp to a practical range for mobile snapshot streaming.
-        return float(np.clip(1.0 / median_dt, 2.0, 60.0))
+        return float(np.clip(1.0 / median_dt, 2.0, self.max_effective_fps))

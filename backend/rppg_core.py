@@ -1,5 +1,13 @@
 import numpy as np
-from scipy.signal import butter, filtfilt, detrend, medfilt, savgol_filter, find_peaks
+from scipy.signal import (
+    butter,
+    detrend,
+    filtfilt,
+    find_peaks,
+    lfilter,
+    medfilt,
+    savgol_filter,
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 0. CONSTANTS
@@ -15,11 +23,22 @@ HIGH_HZ = 4.0  # 240 BPM
 
 def bandpass_filter(signal_1d, fps, low_hz=LOW_HZ, high_hz=HIGH_HZ, order=4):
     """Apply Butterworth bandpass filter to a 1D signal."""
+    signal_1d = np.asarray(signal_1d, dtype=np.float64)
+    if signal_1d.size < 3:
+        return signal_1d.copy()
+
     nyquist = fps / 2.0
     low = max(low_hz / nyquist, 1e-6)
     high = min(high_hz / nyquist, 0.99)
+    if not np.isfinite(low) or not np.isfinite(high) or high <= low:
+        return signal_1d.copy()
 
     b, a = butter(order, [low, high], btype="band")
+    padlen = 3 * max(len(a), len(b))
+    if signal_1d.size <= padlen:
+        # Warm-up fallback for short stream buffers where filtfilt padding is invalid.
+        return lfilter(b, a, signal_1d)
+
     return filtfilt(b, a, signal_1d)
 
 
@@ -127,7 +146,7 @@ def extract_pulse_waveform(pulse, fps):
         return np.array([]), np.array([]), pulse
     clean_pulse = 2 * (pulse - p_min) / (p_max - p_min) - 1
 
-    min_distance = int(fps * 0.4)
+    min_distance = max(1, int(fps * 0.4))
     duration_sec = len(clean_pulse) / fps
     min_expected_peaks = max(3, int(duration_sec * 0.6))
 
@@ -444,6 +463,7 @@ def process_rppg_with_deep(
     face_frames: np.ndarray | None = None,
     motion_scores: np.ndarray | None = None,
     selection_mode: str = "best_confidence",
+    deep_max_frames: int | None = None,
 ) -> dict:
     """
     Full pipeline: POS + optional deep model fusion.
@@ -470,7 +490,11 @@ def process_rppg_with_deep(
 
     if face_frames is not None and is_deep_model_available():
         try:
-            pulse_deep, deep_model_name = extract_bvp_deep(face_frames, fps)
+            pulse_deep, deep_model_name = extract_bvp_deep(
+                face_frames,
+                fps,
+                max_frames=deep_max_frames,
+            )
             pulse_deep = bandpass_filter(pulse_deep, fps)
             deep_available = not np.all(pulse_deep == 0)
         except Exception as e:

@@ -1,6 +1,16 @@
 // app/results.tsx — Full Dashboard ResultsScreen (real data only)
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Animated, Dimensions, Alert } from 'react-native';
+import {
+  View,
+  Text,
+  ScrollView,
+  TouchableOpacity,
+  StyleSheet,
+  Animated,
+  Dimensions,
+  Alert,
+  ActivityIndicator,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import Svg, { Path, Circle, Line, Rect } from 'react-native-svg';
@@ -8,7 +18,13 @@ import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, Typography, Spacing, Radius, Shadows, HealthTipsData } from '../src/theme';
 import type { RPPGResult } from '../src/api/rppgService';
-import { clearScanSession, getScanSession } from '../src/state/scanSession';
+import {
+  clearPendingScanResult,
+  clearScanSession,
+  getPendingScanResult,
+  getScanSession,
+  setScanSession,
+} from '../src/state/scanSession';
 
 const { width } = Dimensions.get('window');
 
@@ -118,6 +134,32 @@ function TipCard({ tip, index, colors, accent }: { tip: any; index: number; colo
   );
 }
 
+function LoadingBlock({ width = '100%', height = 14, colors }: { width?: any; height?: number; colors: any }) {
+  const alpha = useRef(new Animated.Value(0.45)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(alpha, { toValue: 0.85, duration: 700, useNativeDriver: true }),
+        Animated.timing(alpha, { toValue: 0.45, duration: 700, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, []);
+
+  return (
+    <Animated.View
+      style={{
+        width,
+        height,
+        borderRadius: 8,
+        backgroundColor: colors.border,
+        opacity: alpha,
+      }}
+    />
+  );
+}
+
 // ── Main Screen ──
 export default function ResultsScreen() {
   const router = useRouter();
@@ -125,18 +167,57 @@ export default function ResultsScreen() {
   const params = useLocalSearchParams();
   const session = getScanSession();
 
-  let result: RPPGResult;
-  try {
-    if (typeof params.resultJson === 'string' && params.resultJson.length > 0) {
-      result = JSON.parse(params.resultJson as string);
-    } else {
-      result = (session.result ?? {}) as RPPGResult;
+  const initialResult = (() => {
+    try {
+      if (typeof params.resultJson === 'string' && params.resultJson.length > 0) {
+        return JSON.parse(params.resultJson as string) as RPPGResult;
+      }
+      return session.result;
+    } catch {
+      return session.result;
     }
-  } catch {
-    result = (session.result ?? {}) as RPPGResult;
-  }
+  })();
 
-  const hrv = result.hrv_features ?? {} as any;
+  const [resolvedResult, setResolvedResult] = useState<RPPGResult | null>(initialResult ?? null);
+  const [isLoadingResult, setIsLoadingResult] = useState<boolean>(!initialResult);
+
+  useEffect(() => {
+    if (resolvedResult) {
+      setIsLoadingResult(false);
+      return;
+    }
+
+    const pending = getPendingScanResult();
+    if (!pending) {
+      setIsLoadingResult(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingResult(true);
+    pending
+      .then((result) => {
+        if (cancelled) return;
+        setResolvedResult(result);
+        setScanSession({ result, videoUri: session.videoUri });
+        clearPendingScanResult();
+      })
+      .catch(() => {
+        if (cancelled) return;
+        clearPendingScanResult();
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setIsLoadingResult(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [resolvedResult, session.videoUri]);
+
+  const result = (resolvedResult ?? {}) as RPPGResult;
+  const hrv = (result.hrv_features ?? {}) as any;
   const ibi = result.ibi_ms ?? [];
   const bpm = result.bpm ?? (ibi.length ? Math.round(60000 / (ibi.reduce((a: number, b: number) => a + b, 0) / ibi.length)) : null);
   const conf = result.confidence ?? 0;
@@ -156,8 +237,13 @@ export default function ResultsScreen() {
     ...HealthTipsData.general,
   ].slice(0, 5);
 
-  useEffect(() => { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); }, []);
-  const methodLabel = (result.method_used ?? 'pos').replace('_', '+').toUpperCase();
+  useEffect(() => {
+    if (resolvedResult) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    }
+  }, [resolvedResult]);
+
+  const methodLabel = isLoadingResult ? 'ANALYZING' : (result.method_used ?? 'pos').replace('_', '+').toUpperCase();
   const fmt = (v: number | null, d: number = 1) => v !== null && v !== undefined ? v.toFixed(d) : '--';
 
   return (
@@ -176,6 +262,22 @@ export default function ResultsScreen() {
         </View>
 
         <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+
+          {isLoadingResult && (
+            <View style={[styles.loadingCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}> 
+              <View style={styles.loadingHeaderRow}>
+                <ActivityIndicator size="small" color={accent.primary} />
+                <Text style={[styles.loadingTitle, { color: colors.textPrimary }]}>Finalizing Deep rPPG Analysis</Text>
+              </View>
+              <Text style={[styles.loadingBody, { color: colors.textTertiary }]}>POS metrics are ready. PhysFormer + fusion outputs are still being computed.</Text>
+              <View style={{ gap: 10, marginTop: 12 }}>
+                <LoadingBlock colors={colors} width="62%" height={14} />
+                <LoadingBlock colors={colors} width="100%" height={10} />
+                <LoadingBlock colors={colors} width="86%" height={10} />
+                <LoadingBlock colors={colors} width="72%" height={10} />
+              </View>
+            </View>
+          )}
 
           {isFailed && (
             <View style={[styles.failBanner, { backgroundColor: '#7F1D1D', borderColor: '#FCA5A5' }]}> 
@@ -319,6 +421,10 @@ const styles = StyleSheet.create({
   topTitle: { fontFamily: 'SpaceGrotesk-SemiBold', fontSize: 18 },
   toggleBtn: { width: 34, height: 34, borderRadius: 17, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   scrollContent: { paddingHorizontal: Spacing.lg, paddingBottom: 80 },
+  loadingCard: { borderWidth: 1, borderRadius: Radius.lg, padding: Spacing.lg, marginTop: Spacing.md, marginBottom: Spacing.md },
+  loadingHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
+  loadingTitle: { fontFamily: 'SpaceGrotesk-SemiBold', fontSize: 15 },
+  loadingBody: { ...Typography.bodySmall, lineHeight: 18 },
 
   // Hero
   heroBPM: { flexDirection: 'row', alignItems: 'baseline', marginTop: Spacing.xl, marginBottom: Spacing.lg },

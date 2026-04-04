@@ -9,12 +9,14 @@ import Svg, { Circle, Ellipse, Rect, Text as SvgText } from 'react-native-svg';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, Typography, Spacing, Radius } from '../src/theme';
 import { LiveRPPGClient, getMockResult, type RPPGResult } from '../src/api/rppgService';
-import { clearScanSession, setScanSession } from '../src/state/scanSession';
+import { clearScanSession, setPendingScanResult, setScanSession } from '../src/state/scanSession';
 
 const { width, height: screenH } = Dimensions.get('window');
 const RECORD_DURATION = 30;
 const CIRC_R = 54;
 const CIRC = 2 * Math.PI * CIRC_R;
+const STREAM_FRAME_INTERVAL_MS = 180;
+const STREAM_CAPTURE_QUALITY = 0.28;
 
 // ── Snackbar ──
 function Snackbar({ message, visible }: { message: string; visible: boolean }) {
@@ -138,6 +140,9 @@ export default function RecordScreen() {
     usingLiveStreamRef.current = false;
     try {
       const client = new LiveRPPGClient({
+        overlayQuality: 42,
+        overlayMaxSide: 320,
+        overlayStride: 2,
         onFrame: (frame) => {
           setQuality(frame.metric.confidence ?? 0);
           setLiveBpm(frame.metric.bpm ?? null);
@@ -170,7 +175,7 @@ export default function RecordScreen() {
     if (usingLiveStreamRef.current) {
       framePumpRef.current = setInterval(() => {
         void captureAndStreamFrame();
-      }, 250);
+      }, STREAM_FRAME_INTERVAL_MS);
       return;
     }
 
@@ -186,7 +191,7 @@ export default function RecordScreen() {
     try {
       const snap = await camRef.current.takePictureAsync({
         base64: true,
-        quality: 0.45,
+        quality: STREAM_CAPTURE_QUALITY,
         skipProcessing: true,
         shutterSound: false,
       });
@@ -227,20 +232,26 @@ export default function RecordScreen() {
       return;
     }
 
-    let finalResult: RPPGResult | null = null;
-    try {
-      if (!liveClientRef.current) {
-        throw new Error('Live client missing');
-      }
-      finalResult = await liveClientRef.current.stopAndGetFinalResult(60000);
-    } catch {
-      finalResult = getMockResult();
-    } finally {
-      liveClientRef.current?.disconnect();
-      liveClientRef.current = null;
+    const client = liveClientRef.current;
+    liveClientRef.current = null;
+    if (!client) {
+      setScanSession({ result: getMockResult() });
+      router.push({ pathname: '/processing' });
+      return;
     }
 
-    setScanSession({ result: finalResult });
+    const pendingFinal = (async (): Promise<RPPGResult> => {
+      try {
+        return await client.stopAndGetFinalResult(60000);
+      } catch {
+        return getMockResult();
+      } finally {
+        client.disconnect();
+      }
+    })();
+
+    setPendingScanResult(pendingFinal);
+    setScanSession({ result: null });
     router.push({ pathname: '/processing' });
   }, []);
 

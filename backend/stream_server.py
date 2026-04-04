@@ -20,7 +20,20 @@ except ImportError as exc:
     ) from exc
 
 
-def _encode_jpeg(frame_bgr: np.ndarray, quality: int = 80) -> Optional[str]:
+def _encode_jpeg(
+    frame_bgr: np.ndarray,
+    quality: int = 80,
+    max_side: int = 0,
+) -> Optional[str]:
+    if max_side > 0:
+        h, w = frame_bgr.shape[:2]
+        largest = max(h, w)
+        if largest > max_side:
+            scale = float(max_side) / float(largest)
+            out_w = max(1, int(round(w * scale)))
+            out_h = max(1, int(round(h * scale)))
+            frame_bgr = cv2.resize(frame_bgr, (out_w, out_h), interpolation=cv2.INTER_AREA)
+
     ok, buf = cv2.imencode(
         ".jpg",
         frame_bgr,
@@ -31,13 +44,33 @@ def _encode_jpeg(frame_bgr: np.ndarray, quality: int = 80) -> Optional[str]:
     return base64.b64encode(buf.tobytes()).decode("ascii")
 
 
-async def _handle_client(websocket, pipeline: RealtimeRPPGPipeline, jpeg_quality: int):
+async def _handle_client(
+    websocket,
+    pipeline: RealtimeRPPGPipeline,
+    jpeg_quality: int,
+    overlay_max_side: int,
+    overlay_stride: int,
+):
+    client_jpeg_quality = int(np.clip(jpeg_quality, 1, 100))
+    client_overlay_max_side = max(0, int(overlay_max_side))
+    client_overlay_stride = max(1, int(overlay_stride))
+    frame_counter = 0
+
     async for payload in websocket:
         if isinstance(payload, (bytes, bytearray)):
             frame = _decode_binary_frame(payload)
             if frame is None:
                 continue
-            await _send_frame_result(websocket, pipeline, frame, jpeg_quality)
+            send_overlay = (frame_counter % client_overlay_stride) == 0
+            await _send_frame_result(
+                websocket,
+                pipeline,
+                frame,
+                client_jpeg_quality,
+                client_overlay_max_side,
+                send_overlay,
+            )
+            frame_counter += 1
             continue
 
         if not isinstance(payload, str):
@@ -47,7 +80,29 @@ async def _handle_client(websocket, pipeline: RealtimeRPPGPipeline, jpeg_quality
         msg_type = msg.get("type")
 
         if msg_type == "start":
-            await websocket.send(json.dumps({"type": "ack", "status": "ready"}))
+            requested_quality = msg.get("overlay_quality")
+            if isinstance(requested_quality, (int, float)):
+                client_jpeg_quality = int(np.clip(int(requested_quality), 1, 100))
+
+            requested_max_side = msg.get("overlay_max_side")
+            if isinstance(requested_max_side, (int, float)):
+                client_overlay_max_side = max(0, int(requested_max_side))
+
+            requested_overlay_stride = msg.get("overlay_stride")
+            if isinstance(requested_overlay_stride, (int, float)):
+                client_overlay_stride = max(1, int(requested_overlay_stride))
+
+            await websocket.send(
+                json.dumps(
+                    {
+                        "type": "ack",
+                        "status": "ready",
+                        "overlay_quality": client_jpeg_quality,
+                        "overlay_max_side": client_overlay_max_side,
+                        "overlay_stride": client_overlay_stride,
+                    }
+                )
+            )
             continue
 
         if msg_type == "frame":
@@ -61,7 +116,17 @@ async def _handle_client(websocket, pipeline: RealtimeRPPGPipeline, jpeg_quality
                 continue
             client_ts_ms = msg.get("ts_ms")
             ts_ms_override = int(client_ts_ms) if isinstance(client_ts_ms, (int, float)) else None
-            await _send_frame_result(websocket, pipeline, frame, jpeg_quality, ts_ms_override)
+            send_overlay = (frame_counter % client_overlay_stride) == 0
+            await _send_frame_result(
+                websocket,
+                pipeline,
+                frame,
+                client_jpeg_quality,
+                client_overlay_max_side,
+                send_overlay,
+                ts_ms_override,
+            )
+            frame_counter += 1
             continue
 
         if msg_type == "stop":
@@ -112,11 +177,17 @@ async def _send_frame_result(
     pipeline: RealtimeRPPGPipeline,
     frame: np.ndarray,
     jpeg_quality: int,
+    overlay_max_side: int,
+    send_overlay: bool,
     ts_ms_override: Optional[int] = None,
 ):
     ts_ms = int(ts_ms_override) if ts_ms_override is not None else int(asyncio.get_running_loop().time() * 1000)
     out = pipeline.ingest(frame, ts_ms)
-    jpeg_b64 = _encode_jpeg(out["overlay"], quality=jpeg_quality)
+    jpeg_b64 = (
+        _encode_jpeg(out["overlay"], quality=jpeg_quality, max_side=overlay_max_side)
+        if send_overlay
+        else None
+    )
 
     response = {
         "type": "frame_result",
@@ -144,11 +215,31 @@ def _json_ready(value: Any) -> Any:
     return value
 
 
-async def run_server(host: str, port: int, fps: float, model_path: str, jpeg_quality: int):
+async def run_server(
+    host: str,
+    port: int,
+    fps: float,
+    model_path: str,
+    jpeg_quality: int,
+    overlay_max_side: int,
+    overlay_stride: int,
+    live_deep_mode: str,
+):
     async def handler(websocket):
-        pipeline = RealtimeRPPGPipeline(model_path=model_path, fps=fps)
+        pipeline = RealtimeRPPGPipeline(
+            model_path=model_path,
+            fps=fps,
+            live_deep_enabled=(live_deep_mode == "live+final"),
+            final_deep_enabled=(live_deep_mode != "off"),
+        )
         try:
-            await _handle_client(websocket, pipeline, jpeg_quality)
+            await _handle_client(
+                websocket,
+                pipeline,
+                jpeg_quality,
+                overlay_max_side,
+                overlay_stride,
+            )
         finally:
             pipeline.close()
 
@@ -163,7 +254,14 @@ def main():
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--fps", type=float, default=30.0)
     parser.add_argument("--model", default=DEFAULT_MODEL_PATH, dest="model_path")
-    parser.add_argument("--jpeg-quality", type=int, default=75)
+    parser.add_argument("--jpeg-quality", type=int, default=45)
+    parser.add_argument("--overlay-max-side", type=int, default=320)
+    parser.add_argument("--overlay-stride", type=int, default=2)
+    parser.add_argument(
+        "--live-deep-mode",
+        choices=["off", "final-only", "live+final"],
+        default="final-only",
+    )
     args = parser.parse_args()
 
     try:
@@ -174,6 +272,9 @@ def main():
                 fps=args.fps,
                 model_path=args.model_path,
                 jpeg_quality=args.jpeg_quality,
+                overlay_max_side=args.overlay_max_side,
+                overlay_stride=args.overlay_stride,
+                live_deep_mode=args.live_deep_mode,
             )
         )
     except KeyboardInterrupt:

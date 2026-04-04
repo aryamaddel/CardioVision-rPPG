@@ -7,7 +7,13 @@ import Svg, { Circle } from 'react-native-svg';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, Typography, Spacing, Radius } from '../src/theme';
 import { processVideo, getMockResult } from '../src/api/rppgService';
-import { getScanSession, setScanSession } from '../src/state/scanSession';
+import {
+  clearPendingScanResult,
+  getPendingScanResult,
+  getScanSession,
+  setPendingScanResult,
+  setScanSession,
+} from '../src/state/scanSession';
 
 const STEPS = [
   { id: 'upload',  label: 'Streaming capture',      sub: 'Live frames sent to backend websocket', detail: 'The mobile app streams JPEG camera frames to the backend over websocket. If websocket is unavailable, the app falls back to HTTP upload mode.' },
@@ -82,8 +88,8 @@ function StepRow({ label, sub, detail, state, index }: { label: string; sub: str
 
 function PulseBar() {
   const { accent } = useTheme();
-  const bars = Array.from({ length: 24 }, (_, i) => i);
-  const anims = bars.map(() => useRef(new Animated.Value(0.2)).current);
+  const animsRef = useRef(Array.from({ length: 24 }, () => new Animated.Value(0.2)));
+  const anims = animsRef.current;
   useEffect(() => {
     const loops = anims.map((a, i) => Animated.loop(Animated.sequence([
       Animated.delay(i * 60),
@@ -114,42 +120,65 @@ export default function ProcessingScreen() {
 
   const runPipeline = async () => {
     const session = getScanSession();
-    let result: any = null, apiDone = false;
-    if (session.result) {
-      result = session.result;
+    let result: any = null;
+    let apiDone = false;
+
+    const resolveResult = (resolved: any) => {
+      result = resolved;
       apiDone = true;
+      setScanSession({ result: resolved, videoUri: videoUri ?? session.videoUri });
+      clearPendingScanResult();
+    };
+
+    const resolveFallback = () => {
+      resolveResult(getMockResult());
+    };
+
+    if (session.result) {
+      resolveResult(session.result);
     } else if (streamResultJson) {
       try {
-        result = JSON.parse(streamResultJson);
-        apiDone = true;
+        resolveResult(JSON.parse(streamResultJson));
       } catch {
-        result = getMockResult();
-        apiDone = true;
+        resolveFallback();
       }
-    } else if (videoUri) {
-      processVideo(videoUri, (pct) => setProgress(pct))
-        .then(r => { result = r; apiDone = true; })
-        .catch(() => { setTimeout(() => { result = getMockResult(); apiDone = true; }, 2000); });
     } else {
-      result = getMockResult();
-      apiDone = true;
+      let pending = getPendingScanResult();
+      if (!pending && videoUri) {
+        pending = processVideo(videoUri, (pct) => setProgress(pct));
+        setPendingScanResult(pending);
+      }
+
+      if (pending) {
+        pending
+          .then((r) => resolveResult(r))
+          .catch(() => resolveFallback());
+      } else {
+        resolveFallback();
+      }
     }
+
+    const hasPendingBackendWork = !apiDone;
+    const durations = hasPendingBackendWork
+      ? STEP_DURATIONS.map((d) => Math.max(650, Math.round(d * 0.55)))
+      : STEP_DURATIONS.map((d) => Math.max(450, Math.round(d * 0.35)));
 
     for (let i = 0; i < STEPS.length; i++) {
       setStepStates(prev => prev.map((s, idx) => idx === i ? 'active' : idx < i ? 'done' : 'pending'));
       const pctTarget = ((i + 1) / STEPS.length) * 100;
       setProgress(Math.round(pctTarget));
-      Animated.timing(progressAnim, { toValue: pctTarget / 100, duration: STEP_DURATIONS[i] * 0.8, useNativeDriver: false }).start();
-      await new Promise(res => setTimeout(res, STEP_DURATIONS[i]));
+      Animated.timing(progressAnim, { toValue: pctTarget / 100, duration: durations[i] * 0.8, useNativeDriver: false }).start();
+      await new Promise(res => setTimeout(res, durations[i]));
       if (i === STEPS.length - 1) {
         let waited = 0;
-        while (!apiDone && waited < 30000) { await new Promise(res => setTimeout(res, 300)); waited += 300; }
+        while (!apiDone && waited < 6000) { await new Promise(res => setTimeout(res, 300)); waited += 300; }
       }
     }
     setStepStates(STEPS.map(() => 'done'));
     await new Promise(res => setTimeout(res, 600));
-    const finalResult = result ?? getMockResult();
-    setScanSession({ result: finalResult, videoUri: videoUri ?? session.videoUri });
+    if (apiDone && result) {
+      setScanSession({ result, videoUri: videoUri ?? session.videoUri });
+    }
     router.replace({ pathname: '/results' });
   };
 
