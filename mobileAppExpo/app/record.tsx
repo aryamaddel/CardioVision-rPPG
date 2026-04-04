@@ -1,6 +1,6 @@
 // app/record.tsx — RecordScreen
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Animated, Dimensions, Alert, Image } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Animated, Dimensions, Alert } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -15,8 +15,8 @@ const { width, height: screenH } = Dimensions.get('window');
 const RECORD_DURATION = 30;
 const CIRC_R = 54;
 const CIRC = 2 * Math.PI * CIRC_R;
-const STREAM_FRAME_INTERVAL_MS = 180;
-const STREAM_CAPTURE_QUALITY = 0.28;
+const STREAM_FRAME_INTERVAL_MS = 100;
+const STREAM_CAPTURE_QUALITY = 0.45;
 
 // ── Snackbar ──
 function Snackbar({ message, visible }: { message: string; visible: boolean }) {
@@ -102,8 +102,7 @@ export default function RecordScreen() {
   const [overlayJpeg, setOverlayJpeg] = useState<string | null>(null);
   const [snack, setSnack] = useState({ msg: '', show: false, key: 0 });
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const framePumpRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const sendingFrameRef = useRef(false);
+  const framePumpRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const liveClientRef = useRef<LiveRPPGClient | null>(null);
   const fallbackVideoPromiseRef = useRef<Promise<{ uri: string } | null> | null>(null);
   const usingLiveStreamRef = useRef(false);
@@ -140,16 +139,14 @@ export default function RecordScreen() {
     usingLiveStreamRef.current = false;
     try {
       const client = new LiveRPPGClient({
-        overlayQuality: 42,
-        overlayMaxSide: 320,
-        overlayStride: 2,
+        overlayQuality: 20,
+        overlayMaxSide: 0,
+        overlayStride: 999,
         onFrame: (frame) => {
           setQuality(frame.metric.confidence ?? 0);
           setLiveBpm(frame.metric.bpm ?? null);
           setLiveMethod(frame.metric.method ?? 'pending');
-          if (frame.overlay_jpeg_b64) {
-            setOverlayJpeg(`data:image/jpeg;base64,${frame.overlay_jpeg_b64}`);
-          }
+          // No overlay display needed — we use SVG ROI highlights instead.
           if (!frame.has_face) {
             setSnack({ msg: 'Face not detected. Keep your face inside the oval.', show: true, key: Date.now() });
           }
@@ -173,9 +170,17 @@ export default function RecordScreen() {
       if (elapsed >= RECORD_DURATION) stopRecording();
     }, 1000);
     if (usingLiveStreamRef.current) {
-      framePumpRef.current = setInterval(() => {
-        void captureAndStreamFrame();
-      }, STREAM_FRAME_INTERVAL_MS);
+      // Use requestAnimationFrame-style adaptive pump instead of fixed interval.
+      // This ensures we never queue frames faster than we can send them.
+      const pumpFrame = () => {
+        if (!liveClientRef.current) return;
+        void captureAndStreamFrame().finally(() => {
+          if (liveClientRef.current) {
+            framePumpRef.current = setTimeout(pumpFrame, STREAM_FRAME_INTERVAL_MS);
+          }
+        });
+      };
+      framePumpRef.current = setTimeout(pumpFrame, 50);
       return;
     }
 
@@ -186,8 +191,7 @@ export default function RecordScreen() {
   }, [router]);
 
   const captureAndStreamFrame = useCallback(async () => {
-    if (!camRef.current || !liveClientRef.current || sendingFrameRef.current) return;
-    sendingFrameRef.current = true;
+    if (!camRef.current || !liveClientRef.current) return;
     try {
       const snap = await camRef.current.takePictureAsync({
         base64: true,
@@ -196,18 +200,16 @@ export default function RecordScreen() {
         shutterSound: false,
       });
       if (snap?.base64) {
-        liveClientRef.current.sendFrameBase64(snap.base64, Date.now());
+        liveClientRef.current.sendFrameBinary(snap.base64, Date.now());
       }
     } catch {
       // Ignore transient frame capture errors during live stream.
-    } finally {
-      sendingFrameRef.current = false;
     }
   }, []);
 
   const stopRecording = useCallback(async () => {
     if (timerRef.current) clearInterval(timerRef.current);
-    if (framePumpRef.current) clearInterval(framePumpRef.current);
+    if (framePumpRef.current) clearTimeout(framePumpRef.current);
     await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setIsRecording(false);
 
@@ -257,7 +259,7 @@ export default function RecordScreen() {
 
   const reset = () => {
     if (timerRef.current) clearInterval(timerRef.current);
-    if (framePumpRef.current) clearInterval(framePumpRef.current);
+    if (framePumpRef.current) clearTimeout(framePumpRef.current);
     if (!usingLiveStreamRef.current) {
       try { camRef.current?.stopRecording(); } catch {}
     }
@@ -288,7 +290,7 @@ export default function RecordScreen() {
   return (
     <View style={styles.root}>
       <CameraView ref={camRef} style={StyleSheet.absoluteFill} facing="front" mode="video" videoQuality="720p" />
-      {overlayJpeg && isRecording && <Image source={{ uri: overlayJpeg }} style={StyleSheet.absoluteFill} resizeMode="cover" />}
+      {/* Overlay disabled: we show SVG ROI highlights instead of server-streamed overlay */}
       <View style={styles.overlay} />
       <View style={styles.guideContainer}><FaceGuideOverlay isRecording={isRecording} /></View>
 

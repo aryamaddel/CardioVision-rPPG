@@ -102,14 +102,21 @@ def remove_motion_artifacts(pulse, fps, method="savgol"):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def pos_algorithm(rgb, fps, window_sec=6.0):
-    """Plane-Orthogonal-to-Skin (POS) rPPG extraction (Wang et al., 2017)."""
+def pos_algorithm(rgb, fps, window_sec=4.0):
+    """Plane-Orthogonal-to-Skin (POS) rPPG extraction (Wang et al., 2017).
+    
+    Adapted for variable FPS: at low mobile FPS (3-8), windows are smaller
+    but overlap is maximized to maintain signal quality.
+    """
     N = len(rgb)
-    window = int(window_sec * fps)
+    window = max(6, int(window_sec * fps))  # At least 6 frames per window
+    if window > N:
+        window = N  # Use entire signal if shorter than one window
     pulse = np.zeros(N)
     weights = np.zeros(N)
+    step = max(1, window // 3)  # More overlap at low FPS for smoother output
 
-    for start in range(0, N - window, window // 2):
+    for start in range(0, max(1, N - window + 1), step):
         end = start + window
         segment = rgb[start:end].copy()
         mean_c = np.mean(segment, axis=0)
@@ -148,7 +155,7 @@ def extract_pulse_waveform(pulse, fps):
 
     min_distance = max(1, int(fps * 0.4))
     duration_sec = len(clean_pulse) / fps
-    min_expected_peaks = max(3, int(duration_sec * 0.6))
+    min_expected_peaks = max(2, int(duration_sec * 0.5))
 
     threshold_levels = [
         {"height": 0.20, "prominence": 0.20},

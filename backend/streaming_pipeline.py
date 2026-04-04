@@ -18,7 +18,7 @@ from rppg_core import process_rppg, process_rppg_with_deep
 from triage_agent import TriageAgent
 
 
-MIN_DISPLAY_CONFIDENCE = 0.55
+MIN_DISPLAY_CONFIDENCE = 0.40
 
 
 @dataclass
@@ -43,12 +43,12 @@ class RealtimeRPPGPipeline:
         self,
         model_path: str = "face_landmarker.task",
         fps: float = 30.0,
-        pos_min_frames: int = 150,
-        deep_min_frames: int = 240,
-        update_stride: int = 30,
+        pos_min_frames: int = 48,
+        deep_min_frames: int = 72,
+        update_stride: int = 4,
         live_deep_enabled: bool = False,
         final_deep_enabled: bool = True,
-        live_pos_window_sec: float = 12.0,
+        live_pos_window_sec: float = 8.0,
         deep_max_frames: int = 300,
         max_effective_fps: float = 120.0,
     ):
@@ -63,7 +63,8 @@ class RealtimeRPPGPipeline:
         self.max_effective_fps = max(30.0, float(max_effective_fps))
         self.pos_min_seconds = max(2.0, self.pos_min_frames / max(self.fps, 1e-6))
         self.deep_min_seconds = max(4.0, self.deep_min_frames / max(self.fps, 1e-6))
-        self.update_interval_seconds = max(0.5, self.update_stride / max(self.fps, 1e-6))
+        self.update_interval_seconds = max(0.3, self.update_stride / max(self.fps, 1e-6))
+        self._last_fps_log_n = 0
 
         self.roi_extractor = FaceROIExtractor(model_path)
         self.executor = ThreadPoolExecutor(max_workers=1)
@@ -132,8 +133,12 @@ class RealtimeRPPGPipeline:
         method_changed = False
         n = len(self.rgb_samples)
         effective_fps = self._effective_fps()
-        required_pos_frames = max(20, int(round(self.pos_min_seconds * effective_fps)))
-        required_deep_frames = max(30, int(round(self.deep_min_seconds * effective_fps)))
+        # Log effective FPS every ~20 valid frames for debugging mobile throughput.
+        if n % 20 == 0 and n != self._last_fps_log_n:
+            self._last_fps_log_n = n
+            print(f"[pipeline] {n} valid samples, effective fps={effective_fps:.1f}")
+        required_pos_frames = max(12, int(round(self.pos_min_seconds * effective_fps)))
+        required_deep_frames = max(20, int(round(self.deep_min_seconds * effective_fps)))
         dynamic_stride = max(1, int(round(effective_fps * self.update_interval_seconds)))
 
         if n >= required_pos_frames and (self.frame_idx % dynamic_stride == 0):
@@ -153,7 +158,7 @@ class RealtimeRPPGPipeline:
 
     def finalize(self) -> Dict[str, Any]:
         effective_fps = self._effective_fps()
-        min_required = max(24, int(effective_fps * 6.0))
+        min_required = max(12, int(effective_fps * 4.0))
         if len(self.rgb_samples) < min_required:
             return {
                 "status": "failed",
@@ -207,7 +212,7 @@ class RealtimeRPPGPipeline:
         return result
 
     def _update_pos_metric(self, effective_fps: float):
-        window_frames = max(24, int(round(effective_fps * self.live_pos_window_sec)))
+        window_frames = max(12, int(round(effective_fps * self.live_pos_window_sec)))
         rgb = np.asarray(self.rgb_samples[-window_frames:], dtype=np.float64)
         result = process_rppg(rgb, fps=effective_fps)
         confidence = float(result["confidence"])

@@ -178,6 +178,24 @@ export class LiveRPPGClient {
     });
   }
 
+  sendFrameBinary(frameJpegB64: string, tsMs?: number): boolean {
+    if (!this.ws || !this.isOpen) return false;
+    try {
+      // Decode base64 to raw bytes and send as binary WebSocket message.
+      // The server handles binary payloads directly — no JSON parse overhead.
+      const binaryStr = atob(frameJpegB64);
+      const bytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+      this.ws.send(bytes.buffer);
+    } catch {
+      // Fallback to JSON if binary encoding fails
+      return this.sendFrameBase64(frameJpegB64, tsMs);
+    }
+    return true;
+  }
+
   sendFrameBase64(frameJpegB64: string, tsMs?: number): boolean {
     if (!this.ws || !this.isOpen) return false;
     this.ws.send(JSON.stringify({ type: 'frame', frame_jpeg_b64: frameJpegB64, ts_ms: tsMs ?? Date.now() }));

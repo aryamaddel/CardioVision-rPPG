@@ -55,6 +55,8 @@ async def _handle_client(
     client_overlay_max_side = max(0, int(overlay_max_side))
     client_overlay_stride = max(1, int(overlay_stride))
     frame_counter = 0
+    import time as _time
+    _t0 = _time.monotonic()
 
     async for payload in websocket:
         if isinstance(payload, (bytes, bytearray)):
@@ -71,6 +73,9 @@ async def _handle_client(
                 send_overlay,
             )
             frame_counter += 1
+            if frame_counter % 20 == 0:
+                elapsed = _time.monotonic() - _t0
+                print(f"[stream] {frame_counter} frames in {elapsed:.1f}s → {frame_counter/max(elapsed,0.01):.1f} fps received")
             continue
 
         if not isinstance(payload, str):
