@@ -18,6 +18,7 @@ import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, Typography, Spacing, Radius, Shadows, HealthTipsData } from '../src/theme';
 import type { RPPGResult } from '../src/api/rppgService';
+import { generateAndShareReport } from '../src/api/reportGenerator';
 import {
   clearPendingScanResult,
   clearScanSession,
@@ -246,6 +247,21 @@ export default function ResultsScreen() {
   const methodLabel = isLoadingResult ? 'ANALYZING' : (result.method_used ?? 'pos').replace('_', '+').toUpperCase();
   const fmt = (v: number | null, d: number = 1) => v !== null && v !== undefined ? v.toFixed(d) : '--';
 
+  const [isDownloading, setIsDownloading] = useState(false);
+
+  const handleDownloadReport = async () => {
+    if (!resolvedResult || isDownloading) return;
+    setIsDownloading(true);
+    try {
+      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      await generateAndShareReport(resolvedResult);
+    } catch (e: any) {
+      Alert.alert('Report Error', e?.message ?? 'Failed to generate report. Please try again.');
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
   return (
     <View style={[styles.root, { backgroundColor: colors.background }]}>
       <SafeAreaView style={styles.safe} edges={['top']}>
@@ -382,12 +398,17 @@ export default function ResultsScreen() {
 
           {/* Download Report */}
           <TouchableOpacity
-            style={[styles.downloadBtn, { backgroundColor: accent.primary }]}
+            style={[styles.downloadBtn, { backgroundColor: accent.primary, opacity: (!resolvedResult || isDownloading) ? 0.55 : 1 }]}
             activeOpacity={0.85}
-            onPress={() => Alert.alert('Download Report', 'Report download functionality will be added soon.')}
+            onPress={handleDownloadReport}
+            disabled={!resolvedResult || isDownloading}
           >
-            <Ionicons name="download-outline" size={20} color="#FFF" style={{ marginRight: 10 }} />
-            <Text style={styles.downloadText}>Download Report</Text>
+            {isDownloading ? (
+              <ActivityIndicator size="small" color="#FFF" style={{ marginRight: 10 }} />
+            ) : (
+              <Ionicons name="download-outline" size={20} color="#FFF" style={{ marginRight: 10 }} />
+            )}
+            <Text style={styles.downloadText}>{isDownloading ? 'Generating...' : 'Download Report'}</Text>
           </TouchableOpacity>
 
           {/* Scan Again */}
