@@ -235,13 +235,25 @@ export default function ResultsScreen() {
   const lfhf = hrv.lf_hf_ratio ?? null;
   const meanIBI = ibi.length ? (ibi.reduce((a: number, b: number) => a + b, 0) / ibi.length) : null;
 
+  // Fatigue metrics from Facial Pattern Analysis
+  const blinkRate = result.blink_rate ?? null;
+  const eyeOpeningScore = result.eye_opening_score ?? null;
+  const mentalFatigue = result.mental_fatigue ?? 'Unknown';
+  const fatigueColor = mentalFatigue === 'High' ? '#EF4444' : mentalFatigue === 'Moderate' ? '#F59E0B' : mentalFatigue === 'Normal' ? '#22C55E' : colors.textPrimary;
+
+  // Fatigue tips (prepended when elevated fatigue is detected)
+  const fatigueTips = mentalFatigue === 'High' || mentalFatigue === 'Moderate'
+    ? [{ icon: 'eye-outline', title: 'Rest Your Eyes', subtitle: 'Follow the 20-20-20 rule', duration: '3 min', detail: 'Every 20 minutes, look at something 20 feet away for 20 seconds. This reduces eye strain and cognitive fatigue significantly.' }, { icon: 'moon-outline', title: 'Blink Consciously', subtitle: 'Reduced blink rate detected', duration: '1 min', detail: 'A low blink rate signals eye strain and mental fatigue. Take a screen break and consciously blink 10 times slowly to re-moisturize your eyes.' }]
+    : [];
+
   const tips = [
+    ...fatigueTips,
     ...(stress === 'High' ? HealthTipsData.highStress : []),
     ...(stress === 'Medium' ? HealthTipsData.medStress : []),
     ...(stress === 'Low' ? HealthTipsData.lowStress : []),
     ...(bpm && bpm > 90 ? HealthTipsData.highBPM : []),
     ...HealthTipsData.general,
-  ].slice(0, 5);
+  ].slice(0, 6);
 
   useEffect(() => {
     if (resolvedResult) {
@@ -351,6 +363,8 @@ export default function ResultsScreen() {
               <VitalCard label="SDNN" value={fmt(sdnn)} unit="ms" sub="Overall variability" delay={200} colors={colors} />
               <VitalCard label="LF/HF" value={fmt(lfhf, 2)} unit="" sub="Autonomic balance" delay={300} colors={colors} />
               <VitalCard label="Mean IBI" value={meanIBI !== null ? meanIBI.toFixed(0) : '--'} unit="ms" sub="Avg. inter-beat" delay={400} colors={colors} />
+              <VitalCard label="Blink Rate" value={blinkRate !== null ? blinkRate.toFixed(1) : '--'} unit="/min" sub="Eye blinks per minute" delay={500} colors={colors} />
+              <VitalCard label="Eye Opening" value={eyeOpeningScore !== null ? eyeOpeningScore.toFixed(3) : '--'} unit="EAR" sub="Higher = more alert" delay={600} colors={colors} />
             </View>
           </View>
 
@@ -368,6 +382,42 @@ export default function ResultsScreen() {
               <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>Confidence</Text>
               <ConfidenceArc score={conf} colors={colors} accent={accent} />
               <Text style={[styles.confLabel, { color: colors.textTertiary }]}>{conf >= 0.7 ? 'High' : conf >= 0.45 ? 'Medium' : 'Low'}</Text>
+            </View>
+          </View>
+
+          {/* Mental Fatigue Card */}
+          <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+            <View style={styles.sectionHeader}>
+              <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>Mental Fatigue</Text>
+              <Ionicons name="eye-outline" size={16} color={accent.primary} />
+            </View>
+            <View style={styles.stressConfRow}>
+              <View style={[styles.stressConfCard, { backgroundColor: colors.card, borderColor: colors.border, flex: 1.4, borderWidth: 0, padding: 0 }]}>
+                <Text style={[styles.stressValue, { color: fatigueColor }]}>{mentalFatigue}</Text>
+                <Text style={[styles.stressSub, { color: colors.textTertiary }]}>From blink & EAR analysis</Text>
+                <View style={[styles.stressBar, { backgroundColor: colors.border, marginTop: 8 }]}>
+                  <View style={[styles.stressFill, {
+                    width: mentalFatigue === 'High' ? '85%' : mentalFatigue === 'Moderate' ? '50%' : mentalFatigue === 'Normal' ? '20%' : '0%',
+                    backgroundColor: fatigueColor,
+                  }]} />
+                </View>
+              </View>
+              <View style={{ flex: 1, gap: 10 }}>
+                <View style={[styles.stressConfCard, { backgroundColor: colors.surfaceHigh, borderColor: colors.border, flex: 0, padding: 10 }]}>
+                  <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>Blink Rate</Text>
+                  <Text style={[styles.metricBoxValue, { color: colors.textPrimary, fontSize: 20 }]}>
+                    {blinkRate !== null ? blinkRate.toFixed(1) : '--'}
+                    <Text style={[styles.metricBoxUnit, { color: colors.textTertiary }]}> /min</Text>
+                  </Text>
+                </View>
+                <View style={[styles.stressConfCard, { backgroundColor: colors.surfaceHigh, borderColor: colors.border, flex: 0, padding: 10 }]}>
+                  <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>Eye Opening</Text>
+                  <Text style={[styles.metricBoxValue, { color: colors.textPrimary, fontSize: 20 }]}>
+                    {eyeOpeningScore !== null ? eyeOpeningScore.toFixed(3) : '--'}
+                    <Text style={[styles.metricBoxUnit, { color: colors.textTertiary }]}> EAR</Text>
+                  </Text>
+                </View>
+              </View>
             </View>
           </View>
 

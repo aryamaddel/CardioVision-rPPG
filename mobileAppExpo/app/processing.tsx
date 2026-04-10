@@ -16,15 +16,16 @@ import {
 } from '../state/scanSession';
 
 const STEPS = [
-  { id: 'upload',  label: 'Streaming capture',      sub: 'Live frames sent to backend websocket', detail: 'The mobile app streams JPEG camera frames to the backend over websocket. If websocket is unavailable, the app falls back to HTTP upload mode.' },
-  { id: 'roi',     label: 'Face ROI extraction',   sub: 'MediaPipe landmark detection', detail: 'MediaPipe Face Mesh detects 468 facial landmarks. Skin-colored regions (forehead, cheeks, nose) are segmented as Regions of Interest for signal extraction.' },
-  { id: 'pos',     label: 'POS algorithm',         sub: 'Plane-Orthogonal-to-Skin filtering', detail: 'The POS (Plane Orthogonal to Skin) algorithm by Wang et al. (2017) separates the pulse signal from RGB channel variations using chrominance-based filtering.' },
-  { id: 'neural',  label: 'PhysFormer inference',  sub: 'Deep rPPG neural network', detail: 'PhysFormer, a vision transformer pretrained on UBFC-rPPG, processes spatiotemporal facial features to extract a blood volume pulse (BVP) signal with higher SNR.' },
-  { id: 'fusion',  label: 'Signal fusion',         sub: 'POS + neural ensemble', detail: 'POS and PhysFormer signals are weighted by their respective SNR values and fused into a single high-quality pulse waveform using adaptive weighting.' },
-  { id: 'hrv',     label: 'HRV analysis',          sub: 'RMSSD · SDNN · LF/HF extraction', detail: 'Inter-beat intervals are computed from peak detection. Time-domain (RMSSD, SDNN) and frequency-domain (LF/HF ratio) HRV features are extracted.' },
-  { id: 'results', label: 'Compiling results',     sub: 'Building your biometric report', detail: 'All extracted metrics (BPM, HRV, stress level, confidence) are compiled into a structured JSON report for display on the results dashboard.' },
+  { id: 'upload',  label: 'Streaming capture',         sub: 'Live frames sent to backend websocket', detail: 'The mobile app streams JPEG camera frames to the backend over websocket. If websocket is unavailable, the app falls back to HTTP upload mode.' },
+  { id: 'roi',     label: 'Face ROI extraction',        sub: 'MediaPipe landmark detection', detail: 'MediaPipe Face Mesh detects 468 facial landmarks. Skin-colored regions (forehead, cheeks, nose) are segmented as Regions of Interest for signal extraction.' },
+  { id: 'fatigue', label: 'Facial Pattern Analysis',    sub: 'Blink rate & eye-opening detection', detail: 'Eye Aspect Ratio (EAR) is computed from 6 MediaPipe eye-contour landmarks per frame. Blink events are detected when EAR drops below a threshold, and the session-mean EAR is used to classify mental fatigue as Normal, Moderate, or High.' },
+  { id: 'pos',     label: 'POS algorithm',              sub: 'Plane-Orthogonal-to-Skin filtering', detail: 'The POS (Plane Orthogonal to Skin) algorithm by Wang et al. (2017) separates the pulse signal from RGB channel variations using chrominance-based filtering.' },
+  { id: 'neural',  label: 'PhysFormer inference',       sub: 'Deep rPPG neural network', detail: 'PhysFormer, a vision transformer pretrained on UBFC-rPPG, processes spatiotemporal facial features to extract a blood volume pulse (BVP) signal with higher SNR.' },
+  { id: 'fusion',  label: 'Signal fusion',              sub: 'POS + neural ensemble', detail: 'POS and PhysFormer signals are weighted by their respective SNR values and fused into a single high-quality pulse waveform using adaptive weighting.' },
+  { id: 'hrv',     label: 'HRV analysis',               sub: 'RMSSD · SDNN · LF/HF extraction', detail: 'Inter-beat intervals are computed from peak detection. Time-domain (RMSSD, SDNN) and frequency-domain (LF/HF ratio) HRV features are extracted.' },
+  { id: 'results', label: 'Compiling results',          sub: 'Building your biometric report', detail: 'All extracted metrics (BPM, HRV, stress level, fatigue classification, blink rate, confidence) are compiled into a structured JSON report for display on the results dashboard.' },
 ];
-const STEP_DURATIONS = [2000, 2500, 2000, 3000, 1500, 1500, 800];
+const STEP_DURATIONS = [2000, 2500, 1800, 2000, 3000, 1500, 1500, 800];
 
 type StepState = 'pending' | 'active' | 'done';
 

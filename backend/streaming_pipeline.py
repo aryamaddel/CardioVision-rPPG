@@ -80,6 +80,7 @@ class RealtimeRPPGPipeline:
         self.rgb_samples: List[List[float]] = []
         self.face_frames: List[np.ndarray] = []
         self.sample_ts_ms: List[int] = []
+        self.ear_samples: List[float] = []  # Per-frame EAR for fatigue analysis
         self.frame_idx = 0
         self.invalid_streak = 0
         self.frame_rotation_flag = None
@@ -106,6 +107,7 @@ class RealtimeRPPGPipeline:
         self.rgb_samples.clear()
         self.face_frames.clear()
         self.sample_ts_ms.clear()
+        self.ear_samples.clear()
         self.frame_idx = 0
         self.invalid_streak = 0
         self.frame_rotation_flag = None
@@ -216,6 +218,9 @@ class RealtimeRPPGPipeline:
         self.rgb_samples.append([r, g, b])
         self.face_frames.append(roi_res.crops["face"])
         self.sample_ts_ms.append(int(ts_ms))
+        # Buffer EAR sample when available for fatigue analysis
+        if roi_res.ear is not None:
+            self.ear_samples.append(float(roi_res.ear))
         self.invalid_streak = 0
 
         method_changed = False
@@ -344,6 +349,10 @@ class RealtimeRPPGPipeline:
         result["status"] = "success"
         result["frames_processed"] = int(len(self.rgb_samples))
         result["fps"] = float(effective_fps)
+
+        # Merge mental fatigue metrics derived from EAR signal
+        fatigue = self._compute_fatigue_metrics(effective_fps)
+        result.update(fatigue)
         return result
 
     def _update_pos_metric(self, effective_fps: float):
@@ -497,3 +506,70 @@ class RealtimeRPPGPipeline:
             cv2.LINE_AA,
         )
         return vis
+
+    def _compute_fatigue_metrics(self, effective_fps: float) -> Dict[str, Any]:
+        """
+        Analyses the buffered EAR signal to derive blink rate, eye-opening
+        score, and a coarse mental fatigue classification.
+
+        Algorithm:
+          - A blink is counted when EAR drops below EAR_BLINK_THRESH and
+            then recovers above it (leading-edge triggered, debounced by
+            EAR_MIN_BLINK_FRAMES to reject noise).
+          - Eye-opening score is the session-mean EAR (higher = more open /
+            more alert).
+          - Mental fatigue is classified from both blink rate and EAR mean.
+
+        Returns:
+            Dict with keys: blink_rate, eye_opening_score, mental_fatigue.
+        """
+        EAR_BLINK_THRESH = 0.20   # Below this -> eye is considered closed
+        EAR_MIN_BLINK_FRAMES = 2  # Minimum consecutive closed frames for a blink
+
+        default = {"blink_rate": None, "eye_opening_score": None, "mental_fatigue": "Unknown"}
+
+        ear = self.ear_samples
+        if len(ear) < 10:
+            return default
+
+        # ── Blink detection (state machine) ──────────────────────────────
+        blinks = 0
+        closed_streak = 0
+        in_blink = False
+        for val in ear:
+            if val < EAR_BLINK_THRESH:
+                closed_streak += 1
+            else:
+                if in_blink and closed_streak >= EAR_MIN_BLINK_FRAMES:
+                    blinks += 1
+                in_blink = False
+                closed_streak = 0
+
+            if closed_streak >= EAR_MIN_BLINK_FRAMES:
+                in_blink = True
+        # Catch a blink that ends at the very last frame
+        if in_blink and closed_streak >= EAR_MIN_BLINK_FRAMES:
+            blinks += 1
+
+        # ── Derived metrics ──────────────────────────────────────────────
+        fps = max(effective_fps, 1.0)
+        duration_min = max(len(ear) / fps / 60.0, 1e-6)
+        blink_rate = float(blinks / duration_min)  # blinks per minute
+        eye_opening_score = float(np.mean(ear))    # mean EAR (0..~0.35)
+
+        # ── Mental fatigue classification heuristic ───────────────────────
+        # Normal resting blink rate: 12-20 bpm; mean EAR ~0.25-0.30 when alert.
+        # Fatigue signs: low EAR mean (<0.22) OR very low blink rate (<8 bpm)
+        #               indicating prolonged staring / heavy eyelids.
+        if eye_opening_score < 0.21 or blink_rate < 6:
+            mental_fatigue = "High"
+        elif eye_opening_score < 0.25 or blink_rate < 12:
+            mental_fatigue = "Moderate"
+        else:
+            mental_fatigue = "Normal"
+
+        return {
+            "blink_rate": round(blink_rate, 1),
+            "eye_opening_score": round(eye_opening_score, 4),
+            "mental_fatigue": mental_fatigue,
+        }

@@ -61,6 +61,11 @@ export interface RPPGResult {
   frames_processed: number;
   n_frames: number;
   status: string;
+
+  // Facial Pattern Analysis — Blink & Eye-Opening fatigue metrics
+  blink_rate?: number | null;       // blinks per minute
+  eye_opening_score?: number | null; // mean EAR (0 = closed, ~0.3 = alert)
+  mental_fatigue?: string | null;   // 'Normal' | 'Moderate' | 'High' | 'Unknown'
 }
 
 interface LiveMetric {
@@ -282,5 +287,9 @@ export function getMockResult(): RPPGResult {
     method_used: 'pos+deep_ensemble', deep_model_used: 'PhysFormer.pure',
     pos_snr: 8.4, deep_snr: 11.2,
     duration_sec: 30, frames_processed: n, n_frames: n, status: 'success',
+    // Facial Pattern Analysis mock values
+    blink_rate: 15.2,
+    eye_opening_score: 0.27,
+    mental_fatigue: 'Normal',
   };
 }

@@ -25,6 +25,14 @@ MODEL_URL = (
 
 _EXCLUDE_EYE_L = [33, 160, 158, 133, 153, 144]
 _EXCLUDE_EYE_R = [362, 385, 387, 263, 373, 380]
+
+# Standard 6-point EAR landmark indices (Soukupova & Čech, 2016).
+# Left eye: p1=33(outer), p2=160(upper-outer), p3=158(upper-inner),
+#           p4=133(inner), p5=153(lower-inner), p6=144(lower-outer)
+_EAR_EYE_L = [33, 160, 158, 133, 153, 144]
+# Right eye: p1=362(outer), p2=385(upper-outer), p3=387(upper-inner),
+#            p4=263(inner), p5=373(lower-inner), p6=380(lower-outer)
+_EAR_EYE_R = [362, 385, 387, 263, 373, 380]
 _EXCLUDE_BROW_L = [70, 63, 105, 66, 107, 55, 65, 52, 53, 46]
 _EXCLUDE_BROW_R = [336, 296, 334, 293, 300, 285, 295, 282, 283, 276]
 _EXCLUDE_LIPS = [
@@ -73,6 +81,7 @@ class ROIResult:
     crops: Dict[str, np.ndarray]
     face_mask: Optional[np.ndarray] = None
     landmarks: Optional[np.ndarray] = None
+    ear: Optional[float] = None  # Eye Aspect Ratio for fatigue detection
 
 
 class VideoSource:
@@ -238,6 +247,8 @@ class FaceROIExtractor:
             else:
                 crops[roi_name] = np.zeros((64, 64, 3), dtype=np.uint8)
 
+        ear = compute_ear(lm)
+
         return ROIResult(
             masks,
             px_counts,
@@ -246,6 +257,7 @@ class FaceROIExtractor:
             crops,
             face_mask,
             lm,
+            ear,
         )
 
     def close(self):
@@ -449,3 +461,41 @@ def overlay_roi(frame: np.ndarray, roi_masks: Dict[str, np.ndarray]) -> np.ndarr
     overlay[face_mask > 0] = ROI_COLORS["face"]
     cv2.addWeighted(overlay, 0.38, vis, 0.62, 0, vis)
     return vis
+
+
+def compute_ear(lm: np.ndarray) -> Optional[float]:
+    """
+    Computes the Eye Aspect Ratio (EAR) averaged over both eyes.
+
+    Based on the Soukupova & Cech (2016) formula:
+        EAR = (||p2-p6|| + ||p3-p5||) / (2 * ||p1-p4||)
+    where p1..p6 are the six eye-contour landmarks in order.
+    The average of left and right EAR is returned to reduce noise.
+
+    Args:
+        lm (np.ndarray): Array of (N, 2) facial landmark coordinates.
+
+    Returns:
+        Optional[float]: Averaged EAR value, or None if landmarks are invalid.
+    """
+    try:
+        def _single_eye_ear(idx: list) -> float:
+            p = lm[idx]  # shape (6, 2)
+            # Vertical distances
+            A = float(np.linalg.norm(p[1] - p[5]))
+            B = float(np.linalg.norm(p[2] - p[4]))
+            # Horizontal distance
+            C = float(np.linalg.norm(p[0] - p[3]))
+            if C < 1e-6:
+                return 0.0
+            return (A + B) / (2.0 * C)
+
+        max_idx = max(max(_EAR_EYE_L), max(_EAR_EYE_R))
+        if lm.shape[0] <= max_idx:
+            return None
+
+        ear_l = _single_eye_ear(_EAR_EYE_L)
+        ear_r = _single_eye_ear(_EAR_EYE_R)
+        return float((ear_l + ear_r) / 2.0)
+    except Exception:
+        return None
