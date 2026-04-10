@@ -22,7 +22,6 @@ from roi_pipeline import (
     overlay_roi,
 )
 from rppg_core import process_rppg, process_rppg_with_deep
-from triage_agent import TriageAgent
 
 
 MIN_DISPLAY_CONFIDENCE = 0.40
@@ -85,7 +84,6 @@ class RealtimeRPPGPipeline:
         self.invalid_streak = 0
 
         self.current_metric = StreamMetric(bpm=None, confidence=0.0, method="pending")
-        self.triage_agent = TriageAgent()
         self.identity_signature_ref: Optional[np.ndarray] = None
         self.identity_signature_buffer: List[np.ndarray] = []
         self.identity_lock_warmup = 5
@@ -285,10 +283,7 @@ class RealtimeRPPGPipeline:
         result["bpm"] = float(60000.0 / np.median(ibi_ms)) if ibi_ms.size > 0 else None
         result["bpm_mean"] = float(60000.0 / np.mean(ibi_ms)) if ibi_ms.size > 0 else None
 
-        decision = self.triage_agent.decide(result, face_frames=faces)
-        result["triage_mode"] = decision.mode
-        result["triage_reason"] = decision.reason
-        result["visual_stress"] = float(decision.visual_stress_score)
+
         result["status"] = "success"
         result["frames_processed"] = int(len(self.rgb_samples))
         result["fps"] = float(effective_fps)

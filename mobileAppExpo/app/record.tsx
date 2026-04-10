@@ -371,13 +371,9 @@ export default function RecordScreen() {
 
         <View style={{ flex: 1 }} />
 
-        {/* Signal quality bar + triage mode (during recording) */}
+        {/* Signal quality bar (during recording) */}
         {isRecording && (
           <View style={styles.metricsArea}>
-            <View style={styles.triagePill}>
-              <Ionicons name="shield-checkmark-outline" size={14} color={accent.light} />
-              <Text style={styles.triageText}>Biometric Mode</Text>
-            </View>
             <View style={styles.qualityBar}>
               <Text style={styles.qualityLabel}>Signal Quality</Text>
               <View style={styles.qualityTrack}>
@@ -473,8 +469,6 @@ const styles = StyleSheet.create({
 
   // Metrics during recording
   metricsArea: { paddingHorizontal: Spacing.lg, marginBottom: Spacing.sm },
-  triagePill: { flexDirection: 'row', alignItems: 'center', alignSelf: 'center', backgroundColor: 'rgba(57,68,188,0.15)', borderRadius: Radius.full, paddingHorizontal: 14, paddingVertical: 6, marginBottom: 10, gap: 6 },
-  triageText: { fontFamily: 'SpaceGrotesk-Medium', fontSize: 11, color: 'rgba(57,68,188,0.9)', textTransform: 'uppercase', letterSpacing: 0.8 },
   qualityBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: Radius.md, padding: Spacing.md },
   qualityLabel: { fontFamily: 'SpaceGrotesk-Medium', fontSize: 10, color: 'rgba(255,255,255,0.4)', width: 64, textTransform: 'uppercase', letterSpacing: 0.8 },
   qualityTrack: { flex: 1, height: 3, backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 2, marginHorizontal: 10, overflow: 'hidden' },

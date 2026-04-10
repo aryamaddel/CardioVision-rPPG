@@ -56,9 +56,7 @@ export interface RPPGResult {
   deep_model_used?: string;
   pos_snr?: number;
   deep_snr?: number;
-  triage_mode: string;
-  triage_reason: string;
-  visual_stress: number;
+
   duration_sec: number;
   frames_processed: number;
   n_frames: number;
@@ -283,7 +281,6 @@ export function getMockResult(): RPPGResult {
     hrv_features: { rmssd_ms: rmssd, sdnn_ms: 42.3, lf_hf_ratio: 0.87, stress_index: 22, stress_level: 'Low' },
     method_used: 'pos+deep_ensemble', deep_model_used: 'PhysFormer.pure',
     pos_snr: 8.4, deep_snr: 11.2,
-    triage_mode: 'BIOMETRIC', triage_reason: 'Signal reliable (confidence=0.81)', visual_stress: 0,
     duration_sec: 30, frames_processed: n, n_frames: n, status: 'success',
   };
 }
