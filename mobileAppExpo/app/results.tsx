@@ -234,6 +234,8 @@ export default function ResultsScreen() {
   const rmssd = hrv.rmssd_ms ?? null;
   const lfhf = hrv.lf_hf_ratio ?? null;
   const meanIBI = ibi.length ? (ibi.reduce((a: number, b: number) => a + b, 0) / ibi.length) : null;
+  const tremorScore = result.tremor_score !== undefined ? result.tremor_score : null;
+  const tremorLabel = tremorScore === null ? '--' : tremorScore <= 15 ? 'Steady' : tremorScore <= 40 ? 'Mild' : 'High';
 
   const tips = [
     ...(stress === 'High' ? HealthTipsData.highStress : []),
@@ -322,7 +324,7 @@ export default function ResultsScreen() {
             <IBIChart ibi={ibi} colors={colors} accent={accent} />
           </View>
 
-          {/* Stress + Avg. Variability */}
+          {/* Stress + Avg. Variability + Tremor */}
           <View style={styles.metricsRow}>
             <View style={[styles.metricBox, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
               <Text style={[styles.metricBoxLabel, { color: colors.textTertiary }]}>Stress Score</Text>
@@ -331,6 +333,10 @@ export default function ResultsScreen() {
             <View style={[styles.metricBox, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
               <Text style={[styles.metricBoxLabel, { color: colors.textTertiary }]}>Avg. Variability</Text>
               <Text style={[styles.metricBoxValue, { color: colors.textPrimary }]}>{fmt(sdnn, 0)} <Text style={[styles.metricBoxUnit, { color: colors.textTertiary }]}>ms</Text></Text>
+            </View>
+            <View style={[styles.metricBox, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+              <Text style={[styles.metricBoxLabel, { color: colors.textTertiary }]}>Hand Tremor</Text>
+              <Text style={[styles.metricBoxValue, { color: tremorScore !== null && tremorScore > 40 ? '#EF4444' : tremorScore !== null && tremorScore > 15 ? '#F59E0B' : colors.textPrimary }]}>{tremorScore !== null ? tremorScore : '--'} <Text style={[styles.metricBoxUnit, { color: colors.textTertiary }]}>/100</Text></Text>
             </View>
           </View>
 
@@ -351,6 +357,7 @@ export default function ResultsScreen() {
               <VitalCard label="SDNN" value={fmt(sdnn)} unit="ms" sub="Overall variability" delay={200} colors={colors} />
               <VitalCard label="LF/HF" value={fmt(lfhf, 2)} unit="" sub="Autonomic balance" delay={300} colors={colors} />
               <VitalCard label="Mean IBI" value={meanIBI !== null ? meanIBI.toFixed(0) : '--'} unit="ms" sub="Avg. inter-beat" delay={400} colors={colors} />
+              <VitalCard label="Stability" value={tremorLabel} unit="" sub={tremorScore !== null ? `Tremor: ${tremorScore}/100` : 'No data'} delay={500} colors={colors} />
             </View>
           </View>
 

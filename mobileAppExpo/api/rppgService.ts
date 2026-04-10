@@ -56,6 +56,7 @@ export interface RPPGResult {
   deep_model_used?: string;
   pos_snr?: number;
   deep_snr?: number;
+  tremor_score?: number;  // 0-100: 0=very steady, 100=severe tremor
 
   duration_sec: number;
   frames_processed: number;
@@ -207,7 +208,10 @@ export class LiveRPPGClient {
     return true;
   }
 
-  stopAndGetFinalResult(timeoutMs: number = 15000): Promise<RPPGResult> {
+  stopAndGetFinalResult(
+    timeoutMs: number = 15000,
+    accelSamples?: { x: number; y: number; z: number }[],
+  ): Promise<RPPGResult> {
     if (!this.ws || !this.isOpen) {
       return Promise.reject(new Error('Live socket is not connected'));
     }
@@ -216,7 +220,10 @@ export class LiveRPPGClient {
       this.finalResolver = resolve;
       this.finalRejecter = reject;
 
-      this.ws?.send(JSON.stringify({ type: 'stop' }));
+      this.ws?.send(JSON.stringify({
+        type: 'stop',
+        accel_samples: accelSamples ?? [],
+      }));
       setTimeout(() => {
         if (!this.finalResolver) return;
         this.finalResolver = null;

@@ -176,6 +176,11 @@ function buildReportHTML(result: RPPGResult): string {
   const conf = result.confidence ?? 0;
   const stressScore = hrv.stress_index !== undefined && hrv.stress_index !== null ? Math.round(hrv.stress_index) : null;
   const stress = stressScore !== null ? (stressScore >= 60 ? 'High' : stressScore >= 30 ? 'Medium' : 'Low') : 'Unknown';
+  
+  const sdnn = hrv.sdnn_ms ?? null;
+  const rmssd = hrv.rmssd_ms ?? null;
+  const lfhf = hrv.lf_hf_ratio ?? null;
+  const meanIBI = ibi.length ? (ibi.reduce((a: number, b: number) => a + b, 0) / ibi.length) : null;
 
   const reportId = generateReportId();
   const subjectId = generateSubjectId();
@@ -187,6 +192,10 @@ function buildReportHTML(result: RPPGResult): string {
   const recommendations = generateRecommendations(result);
 
   const confDetails = result.confidence_details ?? ({} as any);
+  const tremorScore = (result as any).tremor_score !== undefined ? (result as any).tremor_score : null;
+  const tremorLabel = (result as any).tremor_label ?? (tremorScore === null ? '--' : tremorScore <= 20 ? 'Steady' : tremorScore <= 50 ? 'Mild' : 'High');
+  const tremorPhysioPower = (result as any).tremor_details?.physio_power ?? null;
+  const tremorColor = tremorScore === null ? '#6B7280' : tremorScore > 50 ? '#EF4444' : tremorScore > 20 ? '#F59E0B' : '#22C55E';
 
   return `<!DOCTYPE html>
 <html>
@@ -364,6 +373,11 @@ function buildReportHTML(result: RPPGResult): string {
       <div class="value" style="color:${stressColor}">${stressScore !== null ? stressScore : '--'}<span class="unit">/100</span></div>
       <div class="range">Level: ${stress}</div>
     </div>
+    <div class="vital-cell">
+      <div class="label">Hand Stability</div>
+      <div class="value" style="color:${tremorColor}">${tremorScore !== null ? tremorScore : '--'}<span class="unit">/100</span></div>
+      <div class="range">Tremor: ${tremorLabel}</div>
+    </div>
   </div>
 </div>
 
@@ -407,6 +421,10 @@ function buildReportHTML(result: RPPGResult): string {
   <tr>
     <td>Stress Index Score</td><td>${stressScore !== null ? stressScore : '--'} / 100</td>
     <td>Motion Fraction</td><td>${fmt(result.motion_fraction !== undefined ? result.motion_fraction * 100 : null, 1)}%</td>
+  </tr>
+  <tr>
+    <td>Hand Tremor Score</td><td style="color:${tremorColor}">${tremorScore !== null ? tremorScore : '--'} / 100</td>
+    <td>Tremor Label</td><td>${tremorLabel}${tremorPhysioPower !== null ? ` (Physio Band: ${(tremorPhysioPower * 100).toFixed(1)}%)` : ''}</td>
   </tr>
 </table>
 

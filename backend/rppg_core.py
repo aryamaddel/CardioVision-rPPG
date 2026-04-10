@@ -399,25 +399,20 @@ def compute_hrv_features(ibi_ms):
     except Exception:
         lf_hf = 0.0
 
-    # Basic rule-based Stress Classifier
-    # High stress usually correlates with Low HRV (RMSSD), High LF/HF, and Higher BPM
-    stress_index = 0.0
+    # Dynamic 0-100 Stress Index (Continuous Mapping)
+    # Higher score = More Stress.
+    # 1. HRV Component (RMSSD): 0.02 (high stress) to 0.07 (very calm)
+    hrv_stress = np.interp(rmssd, [0.02, 0.07], [50, 0])
+    
+    # 2. Autonomic Component (LF/HF): 0.5 (calm) to 2.5 (stress)
+    lfhf_stress = np.interp(lf_hf, [0.5, 2.5], [0, 30])
+    
+    # 3. Excitement Component (BPM): 60 (resting) to 110 (high)
+    mean_bpm = 60.0 / max(0.001, float(np.mean(ibi_sec)))
+    bpm_stress = np.interp(mean_bpm, [65, 110], [0, 20])
 
-    if rmssd < 0.02:
-        stress_index += 40
-    elif rmssd < 0.035:
-        stress_index += 20
-
-    if lf_hf > 1.5:
-        stress_index += 40
-    elif lf_hf > 1.0:
-        stress_index += 20
-
-    mean_bpm = 60.0 / np.mean(ibi_sec)
-    if mean_bpm > 90:
-        stress_index += 20
-    elif mean_bpm > 80:
-        stress_index += 10
+    stress_index = float(hrv_stress + lfhf_stress + bpm_stress)
+    stress_index = max(0, min(100, stress_index))
 
     if stress_index >= 60:
         stress_level = "High"

@@ -13,6 +13,7 @@ import numpy as np
 import websockets
 
 from streaming_pipeline import RealtimeRPPGPipeline
+from tremor_analysis import analyze_tremor
 
 DEFAULT_MODEL_PATH = str(Path(__file__).with_name("face_landmarker.task"))
 
@@ -64,6 +65,34 @@ async def _handle_client(websocket, pipeline: RealtimeRPPGPipeline, config: Dict
             
             elif msg_type == "stop":
                 result = pipeline.finalize()
+                # Process accelerometer samples if sent by the client
+                accel_samples = data.get("accel_samples", [])
+                if accel_samples:
+                    tremor = analyze_tremor(accel_samples)
+                    result["tremor_score"] = tremor["tremor_score"]
+                    result["tremor_label"] = tremor["tremor_label"]
+                    result["tremor_details"] = {
+                        "physio_power": tremor["physio_power"],
+                        "rms_jitter": tremor["rms_jitter"],
+                        "n_samples": tremor["n_samples"],
+                        "is_reliable": tremor["is_reliable"],
+                    }
+
+                    # FUSE Tremor into the HRV Stress Score (Tremor acts as an autonomic multiplier)
+                    if "hrv_features" in result and "stress_index" in result["hrv_features"]:
+                        current_stress = result["hrv_features"]["stress_index"]
+                        # Hand tremor can boost stress score by up to +25 points
+                        tremor_boost = float(tremor["tremor_score"]) * 0.25
+                        new_stress = min(100.0, current_stress + tremor_boost)
+                        
+                        result["hrv_features"]["stress_index"] = round(new_stress)
+                        if new_stress >= 60:
+                            result["hrv_features"]["stress_level"] = "High"
+                        elif new_stress >= 30:
+                            result["hrv_features"]["stress_level"] = "Medium"
+                        else:
+                            result["hrv_features"]["stress_level"] = "Low"
+
                 await websocket.send(json.dumps({"type": "final_result", "result": _to_json(result)}))
                 pipeline.reset()
             

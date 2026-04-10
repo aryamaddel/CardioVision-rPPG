@@ -26,6 +26,7 @@ import {
   setPendingScanResult,
   setScanSession,
 } from "../state/scanSession";
+import { Accelerometer } from "expo-sensors";
 
 const { width, height: screenH } = Dimensions.get("window");
 const RECORD_DURATION = 30;
@@ -209,6 +210,9 @@ export default function RecordScreen() {
   const usingLiveStreamRef = useRef(false);
   const pausedRef = useRef(false);
   const qualityAnim = useRef(new Animated.Value(0)).current;
+  // Accelerometer buffer for micro-tremor detection
+  const accelSamplesRef = useRef<{ x: number; y: number; z: number }[]>([]);
+  const accelSubRef = useRef<ReturnType<typeof Accelerometer.addListener> | null>(null);
 
   useEffect(() => {
     if (!permission?.granted) requestPermission();
@@ -227,6 +231,7 @@ export default function RecordScreen() {
       if (timerRef.current) clearInterval(timerRef.current);
       if (framePumpRef.current) clearInterval(framePumpRef.current);
       liveClientRef.current?.disconnect();
+      accelSubRef.current?.remove();
     };
   }, []);
 
@@ -322,6 +327,13 @@ export default function RecordScreen() {
     setPauseReason("none");
     pausedRef.current = false;
     intruderStopTriggeredRef.current = false;
+
+    // ── Start accelerometer for micro-tremor tracking ──
+    accelSamplesRef.current = [];
+    Accelerometer.setUpdateInterval(20); // 50Hz
+    accelSubRef.current = Accelerometer.addListener((data) => {
+      accelSamplesRef.current.push(data);
+    });
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     let elapsed = 0;
     timerRef.current = setInterval(() => {
@@ -372,6 +384,12 @@ export default function RecordScreen() {
     await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setIsRecording(false);
 
+    // ── Stop accelerometer and pass raw samples to backend ──
+    const samples = accelSamplesRef.current;
+    accelSubRef.current?.remove();
+    accelSubRef.current = null;
+    accelSamplesRef.current = [];
+
     if (!usingLiveStreamRef.current) {
       try {
         camRef.current?.stopRecording();
@@ -405,7 +423,8 @@ export default function RecordScreen() {
 
     const pendingFinal = (async (): Promise<RPPGResult> => {
       try {
-        return await client.stopAndGetFinalResult(60000);
+        // Backend performs frequency-domain tremor analysis on raw samples
+        return await client.stopAndGetFinalResult(60000, samples);
       } catch {
         return getMockResult();
       } finally {
