@@ -8,7 +8,12 @@ import argparse
 import asyncio
 from pathlib import Path
 
+import cv2
+import time
+import numpy as np
+
 from stream_server import run_server
+from streaming_pipeline import RealtimeRPPGPipeline
 
 DEFAULT_MODEL_PATH = str(Path(__file__).with_name("face_landmarker.task"))
 
@@ -37,25 +42,72 @@ def main():
     # Maintain mode argument for backward compatibility
     p.add_argument(
         "--mode",
-        choices=["batch", "stream"],
+        choices=["batch", "stream", "preview"],
         default="stream",
-        help="Legacy argument, now forces stream mode.",
+        help="stream: Start websocket server, preview: Start local webcam window.",
     )
+    p.add_argument("--preview", action="store_true", help="Shortcut for --mode preview")
 
     args = p.parse_args()
     
-    asyncio.run(
-        run_server(
-            host=args.ws_host,
-            port=args.ws_port,
-            fps=args.fps,
-            model_path=args.model_path,
-            jpeg_quality=args.jpeg_quality,
-            overlay_max_side=args.overlay_max_side,
-            overlay_stride=args.overlay_stride,
-            live_deep_mode=args.live_deep_mode,
+    if args.mode == "preview" or args.preview:
+        run_local_preview(args.model_path, args.fps)
+    else:
+        asyncio.run(
+            run_server(
+                host=args.ws_host,
+                port=args.ws_port,
+                fps=args.fps,
+                model_path=args.model_path,
+                jpeg_quality=args.jpeg_quality,
+                overlay_max_side=args.overlay_max_side,
+                overlay_stride=args.overlay_stride,
+                live_deep_mode=args.live_deep_mode,
+            )
         )
-    )
+
+def run_local_preview(model_path: str, target_fps: float):
+    """
+    Launches a local OpenCV window using the laptop webcam to visualize ROI tracking.
+    """
+    print(f"📸 Starting local preview using webcam... (Model: {model_path})")
+    pipeline = RealtimeRPPGPipeline(model_path=model_path, fps=target_fps)
+    cap = cv2.VideoCapture(0)
+    
+    if not cap.isOpened():
+        print("❌ Error: Could not open laptop webcam.")
+        return
+
+    print("✅ Preview active. Press 'q' to quit.")
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret: break
+            
+            # mirror for natural feel
+            frame = cv2.flip(frame, 1)
+            ts_ms = int(time.time() * 1000)
+            
+            # Run through pipeline to get overlay
+            res = pipeline.ingest(frame, ts_ms)
+            vis = res["overlay"]
+            
+            # Overlay some data
+            m = res["metric"]
+            bpm_text = f"BPM: {m.bpm:.1f}" if m.bpm else "BPM: --"
+            conf_text = f"Conf: {m.confidence:.1f}"
+            cv2.putText(vis, f"{bpm_text} | {conf_text}", (20, 40), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            cv2.putText(vis, f"Method: {m.method}", (20, 70), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1)
+
+            cv2.imshow("CardioVision ROI Preview", vis)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
+        pipeline.close()
 
 if __name__ == "__main__":
     main()
