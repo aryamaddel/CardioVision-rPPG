@@ -1,6 +1,7 @@
 // src/api/reportGenerator.ts — PDF Report Generator (mirrors LaTeX template)
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system';
 import type { RPPGResult } from './rppgService';
 
 // ────────────────────────────────────────────────────────────────────
@@ -478,7 +479,6 @@ export async function generateAndShareReport(result: RPPGResult): Promise<void> 
   const newUri = uri.replace(/\/([^/]+)\.pdf$/i, '/CardioVision_Report.pdf');
   try {
     // Try to rename the file for a nicer filename in share sheet
-    const FileSystem = require('expo-file-system');
     await FileSystem.moveAsync({ from: uri, to: newUri });
     await Sharing.shareAsync(newUri, {
       mimeType: 'application/pdf',

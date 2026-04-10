@@ -258,10 +258,6 @@ export async function processVideo(
   return response.data;
 }
 
-async function checkHealth(): Promise<boolean> {
-  try { await api.get('/health', { timeout: 3000 }); return true; } catch { return false; }
-}
-
 export function getMockResult(): RPPGResult {
   const fps = 30, duration = 30, n = fps * duration, bpm = 72, freq = bpm / 60;
   const pulseSignal: number[] = [], timestamps: number[] = [];

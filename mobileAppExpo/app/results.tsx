@@ -16,7 +16,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import Svg, { Path, Circle, Line, Rect } from 'react-native-svg';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme, Typography, Spacing, Radius, Shadows, HealthTipsData } from '../theme';
+import { useTheme, Typography, Spacing, Radius, HealthTipsData } from '../theme';
 import type { RPPGResult } from '../api/rppgService';
 import { generateAndShareReport } from '../api/reportGenerator';
 import {
@@ -103,7 +103,7 @@ function ConfidenceArc({ score, colors, accent }: { score: number; colors: any; 
 // ── Vital Metric Card ──
 function VitalCard({ label, value, unit, sub, delay = 0, colors }: { label: string; value: string; unit: string; sub?: string; delay?: number; colors: any }) {
   const anim = useRef(new Animated.Value(0)).current;
-  useEffect(() => { Animated.timing(anim, { toValue: 1, duration: 500, delay, useNativeDriver: true }).start(); }, []);
+  useEffect(() => { Animated.timing(anim, { toValue: 1, duration: 500, delay, useNativeDriver: true }).start(); }, [anim, delay]);
   return (
     <Animated.View style={[styles.vitalCard, { backgroundColor: colors.surfaceHigh, borderColor: colors.border, opacity: anim }]}>
       <Text style={[styles.vitalLabel, { color: colors.textTertiary }]}>{label}</Text>
@@ -146,7 +146,7 @@ function LoadingBlock({ width = '100%', height = 14, colors }: { width?: any; he
     );
     loop.start();
     return () => loop.stop();
-  }, []);
+  }, [alpha]);
 
   return (
     <Animated.View

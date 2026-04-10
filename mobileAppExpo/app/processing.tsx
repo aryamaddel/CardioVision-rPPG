@@ -40,7 +40,7 @@ function StepRow({ label, sub, detail, state, index }: { label: string; sub: str
     if (state !== 'pending') Animated.timing(fadeIn, { toValue: 1, duration: 300, useNativeDriver: true }).start();
     if (state === 'active') Animated.loop(Animated.timing(spinAnim, { toValue: 1, duration: 900, useNativeDriver: true })).start();
     if (state === 'done') Animated.spring(checkScale, { toValue: 1, friction: 6, tension: 100, useNativeDriver: true }).start();
-  }, [state]);
+  }, [state, fadeIn, spinAnim, checkScale]);
 
   const spin = spinAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
 
@@ -98,7 +98,7 @@ function PulseBar() {
     ])));
     loops.forEach(l => l.start());
     return () => loops.forEach(l => l.stop());
-  }, []);
+  }, [anims]);
   return (
     <View style={styles.pulseBar}>
       {anims.map((a, i) => <Animated.View key={i} style={{ width: 3, borderRadius: 2, backgroundColor: accent.primary, marginHorizontal: 1.5, height: 36, transform: [{ scaleY: a }] }} />)}
@@ -116,10 +116,9 @@ export default function ProcessingScreen() {
   const [progress, setProgress] = useState(0);
   const progressAnim = useRef(new Animated.Value(0)).current;
 
-  useEffect(() => { runPipeline(); }, []);
-
-  const runPipeline = async () => {
-    const session = getScanSession();
+  useEffect(() => {
+    const runPipeline = async () => {
+      const session = getScanSession();
     let result: any = null;
     let apiDone = false;
 
@@ -181,6 +180,8 @@ export default function ProcessingScreen() {
     }
     router.replace({ pathname: '/results' });
   };
+  runPipeline();
+  }, [videoUri, streamResultJson, progressAnim, router]);
 
   const progressWidth = progressAnim.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] });
 

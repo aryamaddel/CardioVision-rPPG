@@ -6,7 +6,7 @@ import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import * as DocumentPicker from 'expo-document-picker';
-import Svg, { Path, Line, Circle as SvgCircle, Defs, LinearGradient as SvgLinGrad, Stop } from 'react-native-svg';
+import Svg, { Path } from 'react-native-svg';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, Typography, Spacing, Radius, Shadows } from '../theme';
 
@@ -19,7 +19,7 @@ function ECGBackground() {
   useEffect(() => {
     Animated.loop(Animated.timing(offset, { toValue: -width, duration: 3000, useNativeDriver: true })).start();
     return () => {};
-  }, []);
+  }, [offset]);
   const ecg = `M0,40 L${width*0.08},40 L${width*0.12},40 L${width*0.14},15 L${width*0.16},65 L${width*0.19},8 L${width*0.22},40 L${width*0.35},40 L${width*0.38},15 L${width*0.40},65 L${width*0.43},8 L${width*0.46},40 L${width*0.6},40 L${width*0.63},15 L${width*0.65},65 L${width*0.68},8 L${width*0.71},40 L${width},40`;
   return (
     <Animated.View style={{ position: 'absolute', top: 0, left: 0, width: width * 2, transform: [{ translateX: offset }] }} pointerEvents="none">
@@ -37,7 +37,7 @@ function FlowNode({ icon, label, index, total }: { icon: string; label: string; 
   const fadeIn = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     Animated.timing(fadeIn, { toValue: 1, duration: 500, delay: index * 120, useNativeDriver: true }).start();
-  }, []);
+  }, [fadeIn, index]);
   return (
     <Animated.View style={{ opacity: fadeIn, alignItems: 'center' }}>
       <View style={[styles.flowNode, { backgroundColor: colors.surface, borderColor: colors.border }]}>
@@ -67,7 +67,7 @@ export default function HomeScreen() {
       Animated.timing(heroAlpha, { toValue: 1, duration: 800, useNativeDriver: true }),
       Animated.spring(btnScale, { toValue: 1, delay: 300, friction: 7, useNativeDriver: true }),
     ]).start();
-  }, []);
+  }, [heroY, heroAlpha, btnScale]);
 
   const handleScan = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);

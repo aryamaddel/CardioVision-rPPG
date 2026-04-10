@@ -5,9 +5,9 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
-import Svg, { Circle, Ellipse, Rect, Text as SvgText } from 'react-native-svg';
+import Svg, { Circle, Rect, Text as SvgText } from 'react-native-svg';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme, Typography, Spacing, Radius } from '../theme';
+import { useTheme, Spacing, Radius } from '../theme';
 import { LiveRPPGClient, getMockResult, type RPPGResult } from '../api/rppgService';
 import { clearScanSession, setPendingScanResult, setScanSession } from '../state/scanSession';
 
@@ -29,7 +29,7 @@ function Snackbar({ message, visible }: { message: string; visible: boolean }) {
         Animated.timing(opacity, { toValue: 0, duration: 300, useNativeDriver: true }),
       ]).start();
     }
-  }, [visible, message]);
+  }, [visible, message, opacity]);
   if (!visible) return null;
   return (
     <Animated.View style={[styles.snackbar, { opacity }]}>
@@ -75,7 +75,7 @@ function FaceGuideOverlay({ isRecording }: { isRecording: boolean }) {
       ]));
       loop.start(); return () => loop.stop();
     }
-  }, [isRecording]);
+  }, [isRecording, pulse]);
   const ovalW = width * 0.62, ovalH = ovalW * 1.35;
   return (
     <Animated.View style={[styles.faceOval, {
@@ -101,7 +101,6 @@ export default function RecordScreen() {
   const [liveMethod, setLiveMethod] = useState('pending');
   const [isTimerPaused, setIsTimerPaused] = useState(false);
   const [pauseReason, setPauseReason] = useState<'none' | 'face_lost' | 'unknown_person'>('none');
-  const [overlayJpeg, setOverlayJpeg] = useState<string | null>(null);
   const [snack, setSnack] = useState({ msg: '', show: false, key: 0 });
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const framePumpRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -112,11 +111,11 @@ export default function RecordScreen() {
   const pausedRef = useRef(false);
   const qualityAnim = useRef(new Animated.Value(0)).current;
 
-  useEffect(() => { if (!permission?.granted) requestPermission(); }, []);
+  useEffect(() => { if (!permission?.granted) requestPermission(); }, [permission?.granted, requestPermission]);
 
   useEffect(() => {
     Animated.timing(qualityAnim, { toValue: quality, duration: 300, useNativeDriver: false }).start();
-  }, [quality]);
+  }, [quality, qualityAnim]);
 
   useEffect(() => {
     return () => {
@@ -187,7 +186,7 @@ export default function RecordScreen() {
       );
     }
 
-    setIsRecording(true); setTimeLeft(RECORD_DURATION); setQuality(0); setLiveBpm(null); setLiveMethod('pending'); setOverlayJpeg(null);
+    setIsRecording(true); setTimeLeft(RECORD_DURATION); setQuality(0); setLiveBpm(null); setLiveMethod('pending');
     setIsTimerPaused(false); setPauseReason('none'); pausedRef.current = false;
     intruderStopTriggeredRef.current = false;
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
@@ -214,11 +213,11 @@ export default function RecordScreen() {
       return;
     }
 
-    fallbackVideoPromiseRef.current = camRef.current
-      .recordAsync({ maxDuration: RECORD_DURATION })
-      .then((video) => (video?.uri ? { uri: video.uri } : null))
-      .catch(() => null);
-  }, [router]);
+      fallbackVideoPromiseRef.current = camRef.current
+        .recordAsync({ maxDuration: RECORD_DURATION })
+        .then((video) => (video?.uri ? { uri: video.uri } : null))
+        .catch(() => null);
+  }, [captureAndStreamFrame, stopRecording]);
 
   const captureAndStreamFrame = useCallback(async () => {
     if (!camRef.current || !liveClientRef.current) return;
@@ -285,7 +284,7 @@ export default function RecordScreen() {
     setPendingScanResult(pendingFinal);
     setScanSession({ result: null });
     router.push({ pathname: '/processing' });
-  }, []);
+  }, [router]);
 
   const reset = () => {
     if (timerRef.current) clearInterval(timerRef.current);
@@ -300,7 +299,7 @@ export default function RecordScreen() {
     pausedRef.current = false;
     intruderStopTriggeredRef.current = false;
     setIsRecording(false); setCountdown3(false); setTimeLeft(RECORD_DURATION); setProgress(0);
-    setQuality(0); setLiveBpm(null); setLiveMethod('pending'); setOverlayJpeg(null);
+    setQuality(0); setLiveBpm(null); setLiveMethod('pending');
     setIsTimerPaused(false); setPauseReason('none');
   };
 
