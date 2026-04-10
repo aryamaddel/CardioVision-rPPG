@@ -254,7 +254,7 @@ def extract_pulse_waveform(pulse, fps):
         peaks_idx, _ = find_peaks(clean_pulse, distance=min_distance, **params)
         if len(peaks_idx) >= 2:
             ibi_ms = (np.diff(peaks_idx) / fps) * 1000
-            ibi_ms = ibi_ms[(ibi_ms >= 300) & (ibi_ms <= 1500)]
+            ibi_ms = ibi_ms[(ibi_ms >= 200) & (ibi_ms <= 2000)]
         if len(peaks_idx) >= min_expected_peaks and len(ibi_ms) >= 2:
             break
 
@@ -325,12 +325,12 @@ def compute_confidence_score(pulse, fps, ibi_ms):
             )
         details["dominant_bpm"] = float(peak_f * 60)
 
-    # 3. Peak Density (0.15)
+    # 3. Peak Density (0.15) — cover full clinical HR range: 30–300 BPM
     if len(ibi_ms) >= 1:
         bpm = 60000.0 / np.mean(ibi_ms)
-        density_score = 1.0 if 45 <= bpm <= 160 else (0.6 if 35 <= bpm <= 200 else 0.2)
+        density_score = 1.0 if 30 <= bpm <= 300 else 0.2
     else:
-        density_score = 0.1 if 40 <= details.get("dominant_bpm", 0) <= 180 else 0.0
+        density_score = 0.1 if 30 <= details.get("dominant_bpm", 0) <= 300 else 0.0
 
     # 4. Data Duration (0.20)
     data_score = float(np.clip(duration / 15.0, 0.0, 1.0))
@@ -581,7 +581,6 @@ def process_rppg_with_deep(
     face_frames: np.ndarray | None = None,
     motion_scores: np.ndarray | None = None,
     selection_mode: str = "best_confidence",
-    deep_max_frames: int | None = None,
 ) -> dict:
     """
     Advanced rPPG pipeline fusing statistical POS and deep learning models.
@@ -613,15 +612,11 @@ def process_rppg_with_deep(
 
     if face_frames is not None and is_deep_model_available():
         try:
-            pulse_deep, deep_model_name = extract_bvp_deep(
-                face_frames,
-                fps,
-                max_frames=deep_max_frames,
-            )
-            pulse_deep = bandpass_filter(pulse_deep, fps)
-            deep_available = not np.all(pulse_deep == 0)
+            pulse_deep_raw, deep_model_name = extract_bvp_deep(face_frames, fps)
+            pulse_deep = bandpass_filter(pulse_deep_raw, fps)
+            deep_available = True
         except Exception as e:
-            print(f"[rppg_core] Deep model error: {e}")
+            print(f"[rppg_core] Deep model skipped: {e}")
 
     deep_result = None
     if deep_available:

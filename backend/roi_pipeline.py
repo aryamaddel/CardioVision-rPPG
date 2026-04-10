@@ -62,6 +62,7 @@ MAX_FACE_TEXTURE_VAR = 1800.0
 MIN_TOTAL_GUARDRAIL_PASSES = 3
 MIN_HSV_SKIN_RATIO = 0.10
 MIN_SKIN_MASK_IOU = 0.35
+MIN_SKIN_PIXELS = 500
 
 
 @dataclass
@@ -288,54 +289,71 @@ def _evaluate_human_face_guardrails(
     bbox: Tuple[int, int, int, int],
     lm: np.ndarray,
 ) -> Tuple[bool, Dict[str, bool]]:
+    """Gate frames on two hard criteria only:
+
+    1. Face bounding-box covers a reasonable image area (not too small/large).
+    2. The face ROI contains at least MIN_SKIN_PIXELS detected skin pixels
+       (YCrCb OR HSV — either colorspace match counts).
+
+    Head pose is intentionally NOT a gate.  A person looking to the side often
+    exposes more cheek skin — suppressing those frames hurts signal quality.
+    """
     h, w = frame_bgr.shape[:2]
     _, _, bw, bh = bbox
     face_area_ratio = float((bw * bh) / max(1, w * h))
+    area_ok = MIN_FACE_AREA_RATIO <= face_area_ratio <= MAX_FACE_AREA_RATIO
+
     skin_ratio_ycrcb, skin_ratio_hsv, skin_iou = _estimate_skin_consistency(frame_bgr, face_mask)
+    total_face_px = int(np.count_nonzero(face_mask > 0))
+    # Count pixels that pass either skin colorspace model
+    ycrcb_px = int(round(skin_ratio_ycrcb * total_face_px))
+    hsv_px   = int(round(skin_ratio_hsv   * total_face_px))
+    skin_px  = max(ycrcb_px, hsv_px)
+    skin_ok  = skin_px >= MIN_SKIN_PIXELS
 
     checks = {
-        "area": MIN_FACE_AREA_RATIO <= face_area_ratio <= MAX_FACE_AREA_RATIO,
+        "area":       area_ok,
         "skin_ycrcb": skin_ratio_ycrcb >= MIN_SKIN_RATIO,
-        "skin_hsv": skin_ratio_hsv >= MIN_HSV_SKIN_RATIO,
-        "skin_iou": skin_iou >= MIN_SKIN_MASK_IOU,
-        "geometry": _passes_face_geometry_guard(lm, bbox),
-        "texture": _passes_texture_guard(frame_bgr, bbox),
+        "skin_hsv":   skin_ratio_hsv   >= MIN_HSV_SKIN_RATIO,
+        "skin_iou":   skin_iou         >= MIN_SKIN_MASK_IOU,
+        "geometry":   _passes_face_geometry_guard(lm, bbox),
+        "texture":    _passes_texture_guard(frame_bgr, bbox),
+        "skin_pixels": skin_ok,
     }
 
-    mandatory_ok = checks["area"] and checks["skin_ycrcb"] and checks["skin_hsv"]
-    # Multiple independent checks must pass to avoid non-human/screen spoofs.
-    passed = mandatory_ok and (sum(bool(v) for v in checks.values()) >= (MIN_TOTAL_GUARDRAIL_PASSES + 2))
+    # Hard gates: face must be a plausible size AND have enough skin pixels.
+    # All soft checks (skin ratios, geometry, texture) are informational only.
+    passed = area_ok and skin_ok
     return passed, checks
 
 
 def _passes_face_geometry_guard(lm: np.ndarray, bbox: Tuple[int, int, int, int]) -> bool:
+    """Rejects only biologically impossible landmark configurations
+    (e.g., eyes swapped, nose outside face box).  Does NOT penalise
+    off-centre or side-facing heads."""
     _, _, bw, bh = bbox
     face_w = max(float(bw), 1.0)
     face_h = max(float(bh), 1.0)
 
     try:
-        left_eye = lm[33]
+        left_eye  = lm[33]
         right_eye = lm[263]
-        nose_tip = lm[1]
+        nose_tip  = lm[1]
         upper_lip = lm[13]
 
-        eye_dist = float(np.linalg.norm(left_eye - right_eye) / face_w)
+        eye_dist      = float(np.linalg.norm(left_eye - right_eye) / face_w)
         nose_to_mouth = float(np.linalg.norm(nose_tip - upper_lip) / face_h)
-        eye_y = float((left_eye[1] + right_eye[1]) * 0.5)
-        eye_to_mouth = float((upper_lip[1] - eye_y) / face_h)
-        nose_center_offset = float(
-            abs(nose_tip[0] - ((left_eye[0] + right_eye[0]) * 0.5)) / face_w
-        )
+        eye_to_mouth  = float((upper_lip[1] - ((left_eye[1] + right_eye[1]) * 0.5)) / face_h)
     except Exception:
         return False
 
+    # Very loose bounds — only reject anatomically impossible ratios.
     geometry_checks = [
-        0.22 <= eye_dist <= 0.70,
-        0.03 <= nose_to_mouth <= 0.35,
-        0.12 <= eye_to_mouth <= 0.70,
-        nose_center_offset <= 0.20,
+        0.10 <= eye_dist      <= 0.90,   # eyes exist and are separated
+        0.01 <= nose_to_mouth <= 0.50,   # nose and mouth are not fused
+        0.05 <= eye_to_mouth  <= 0.85,   # eyes are above mouth
     ]
-    return sum(bool(v) for v in geometry_checks) >= 3
+    return all(geometry_checks)
 
 
 def _passes_texture_guard(frame_bgr: np.ndarray, bbox: Tuple[int, int, int, int]) -> bool:

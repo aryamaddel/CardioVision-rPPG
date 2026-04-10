@@ -132,25 +132,27 @@ def extract_bvp_deep(
     face_frames: np.ndarray,
     fps: float,
     model_name: str = "auto",
-    max_frames: int | None = 300,
 ) -> tuple[np.ndarray, str]:
     """
     Extracts the BVP signal from face frames using a neural network.
 
-    Manages model loading, data preprocessing, external model execution, 
-    and output resampling.
+    Manages model loading, data preprocessing, external model execution,
+    and output resampling to match the original frame count.
+
+    More frames always yield better predictions — no downsampling is performed.
+    Raises RuntimeError on failure so callers can skip the result instead of
+    propagating corrupt zeros.
 
     Args:
         face_frames (np.ndarray): (N, H, W, 3) BGR image array.
         fps (float): Frame rate.
         model_name (str): Model architecture name (defaults to PhysFormer).
-        max_frames (int, optional): Limits memory usage by downsampling long clips.
 
     Returns:
         Tuple[np.ndarray, str]: (The 1D pulse waveform, the name of the model used).
     """
     if face_frames is None or len(face_frames) == 0:
-        return np.array([], dtype=np.float64), "none"
+        raise ValueError("extract_bvp_deep: no frames provided")
 
     chosen_model = _MODEL_NAME if model_name == "auto" else model_name
     if chosen_model != _MODEL_NAME:
@@ -159,24 +161,15 @@ def extract_bvp_deep(
         )
         chosen_model = _MODEL_NAME
 
-    tmp_path = None
     original_frames = int(len(face_frames))
-    frames_for_model = face_frames
     fps_for_model = float(fps)
 
-    if max_frames is not None and original_frames > int(max_frames):
-        target_frames = max(60, int(max_frames))
-        idx = np.linspace(0, original_frames - 1, target_frames, dtype=np.int32)
-        frames_for_model = face_frames[idx]
-        fps_for_model = max(1.0, float(fps) * (target_frames / original_frames))
+    # Ensure contiguous uint8 array in one consolidated pass
+    frames_for_model = face_frames if isinstance(face_frames, np.ndarray) else np.asarray(face_frames)
+    if frames_for_model.dtype != np.uint8 or not frames_for_model.flags["C_CONTIGUOUS"]:
+        frames_for_model = np.ascontiguousarray(frames_for_model, dtype=np.uint8)
 
-    if not isinstance(frames_for_model, np.ndarray):
-        frames_for_model = np.asarray(frames_for_model)
-    if frames_for_model.dtype != np.uint8:
-        frames_for_model = frames_for_model.astype(np.uint8, copy=False)
-    if not frames_for_model.flags["C_CONTIGUOUS"]:
-        frames_for_model = np.ascontiguousarray(frames_for_model)
-
+    tmp_path = None
     try:
         model = _load_model(chosen_model)
         tmp_path = frames_to_temp_video(frames_for_model, fps_for_model)
@@ -194,8 +187,7 @@ def extract_bvp_deep(
         print(f"[deep_rppg] ✅ {chosen_model} → BVP extracted ({len(bvp)} samples)")
         return bvp, chosen_model
     except Exception as e:
-        print(f"[deep_rppg] ❌ {chosen_model} failed: {e}")
-        return np.zeros(original_frames, dtype=np.float64), "none"
+        raise RuntimeError(f"[deep_rppg] {chosen_model} failed: {e}") from e
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
