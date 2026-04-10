@@ -22,10 +22,9 @@ const STEPS = [
   { id: 'neural',  label: 'PhysFormer inference',  sub: 'Deep rPPG neural network', detail: 'PhysFormer, a vision transformer pretrained on UBFC-rPPG, processes spatiotemporal facial features to extract a blood volume pulse (BVP) signal with higher SNR.' },
   { id: 'fusion',  label: 'Signal fusion',         sub: 'POS + neural ensemble', detail: 'POS and PhysFormer signals are weighted by their respective SNR values and fused into a single high-quality pulse waveform using adaptive weighting.' },
   { id: 'hrv',     label: 'HRV analysis',          sub: 'RMSSD · SDNN · LF/HF extraction', detail: 'Inter-beat intervals are computed from peak detection. Time-domain (RMSSD, SDNN) and frequency-domain (LF/HF ratio) HRV features are extracted.' },
-  { id: 'triage',  label: 'Triage agent',          sub: 'Mode decision & quality gating', detail: 'The triage agent evaluates signal confidence. If biometric quality is insufficient, it falls back to visual assessment mode using facial color analysis.' },
   { id: 'results', label: 'Compiling results',     sub: 'Building your biometric report', detail: 'All extracted metrics (BPM, HRV, stress level, confidence) are compiled into a structured JSON report for display on the results dashboard.' },
 ];
-const STEP_DURATIONS = [2000, 2500, 2000, 3000, 1500, 1500, 1000, 800];
+const STEP_DURATIONS = [2000, 2500, 2000, 3000, 1500, 1500, 800];
 
 type StepState = 'pending' | 'active' | 'done';
 

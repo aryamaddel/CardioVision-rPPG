@@ -228,7 +228,8 @@ export default function ResultsScreen() {
     failReason === 'identity_mismatch_detected'
       ? 'Session interrupted: a different person was detected. Restart and keep the same person in frame for the full scan.'
       : (failReason ?? 'Insufficient valid face frames. Keep face centered and well-lit.');
-  const stress = hrv.stress_level ?? 'Unknown';
+  const stressScore = hrv.stress_index !== undefined && hrv.stress_index !== null ? Math.round(hrv.stress_index) : null;
+  const stress = stressScore !== null ? (stressScore >= 60 ? 'High' : stressScore >= 30 ? 'Medium' : 'Low') : 'Unknown';
   const sdnn = hrv.sdnn_ms ?? null;
   const rmssd = hrv.rmssd_ms ?? null;
   const lfhf = hrv.lf_hf_ratio ?? null;
@@ -324,8 +325,8 @@ export default function ResultsScreen() {
           {/* Stress + Avg. Variability */}
           <View style={styles.metricsRow}>
             <View style={[styles.metricBox, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-              <Text style={[styles.metricBoxLabel, { color: colors.textTertiary }]}>Stress Level</Text>
-              <Text style={[styles.metricBoxValue, { color: stress === 'High' ? '#EF4444' : stress === 'Medium' ? '#F59E0B' : colors.textPrimary }]}>{stress}</Text>
+              <Text style={[styles.metricBoxLabel, { color: colors.textTertiary }]}>Stress Score</Text>
+              <Text style={[styles.metricBoxValue, { color: stress === 'High' ? '#EF4444' : stress === 'Medium' ? '#F59E0B' : colors.textPrimary }]}>{stressScore !== null ? stressScore : '--'} <Text style={[styles.metricBoxUnit, { color: colors.textTertiary }]}>/100</Text></Text>
             </View>
             <View style={[styles.metricBox, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
               <Text style={[styles.metricBoxLabel, { color: colors.textTertiary }]}>Avg. Variability</Text>
@@ -356,9 +357,9 @@ export default function ResultsScreen() {
           {/* Confidence + Stress Index */}
           <View style={styles.stressConfRow}>
             <View style={[styles.stressConfCard, { backgroundColor: colors.card, borderColor: colors.cardBorder, flex: 1.4 }]}>
-              <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>Stress Level</Text>
-              <Text style={[styles.stressValue, { color: stress === 'High' ? '#EF4444' : stress === 'Low' ? '#22C55E' : colors.textPrimary }]}>{stress}</Text>
-              <Text style={[styles.stressSub, { color: colors.textTertiary }]}>Index: {hrv.stress_index !== undefined ? hrv.stress_index.toFixed(0) : '--'}/100</Text>
+              <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>Stress Score</Text>
+              <Text style={[styles.stressValue, { color: stress === 'High' ? '#EF4444' : stress === 'Low' ? '#22C55E' : colors.textPrimary }]}>{stressScore !== null ? stressScore : '--'}</Text>
+              <Text style={[styles.stressSub, { color: colors.textTertiary }]}>Level: {stress}</Text>
               <View style={[styles.stressBar, { backgroundColor: colors.border }]}>
                 <View style={[styles.stressFill, { width: `${hrv.stress_index ?? 0}%`, backgroundColor: accent.primary }]} />
               </View>

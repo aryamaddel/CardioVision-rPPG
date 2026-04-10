@@ -152,9 +152,9 @@ function generateRecommendations(result: RPPGResult): string[] {
   }
 
   // Stress
-  const stress = hrv.stress_level ?? 'Unknown';
-  if (stress === 'High') {
-    recs.push('<b>Stress Management:</b> Elevated stress detected. Consider incorporating structured breaks, mindfulness practices, or physical activity into your daily routine.');
+  const stressIndex = hrv.stress_index ?? 0;
+  if (stressIndex >= 60) {
+    recs.push('<b>Stress Management:</b> Elevated stress detected (Score: ' + fmt(stressIndex, 0) + '). Consider incorporating structured breaks, mindfulness practices, or physical activity into your daily routine.');
   }
 
   // BPM
@@ -174,12 +174,8 @@ function buildReportHTML(result: RPPGResult): string {
   const ibi = result.ibi_ms ?? [];
   const bpm = result.bpm ?? (ibi.length ? Math.round(60000 / (ibi.reduce((a, b) => a + b, 0) / ibi.length)) : null);
   const conf = result.confidence ?? 0;
-  const stress = hrv.stress_level ?? 'Unknown';
-  const sdnn = hrv.sdnn_ms ?? null;
-  const rmssd = hrv.rmssd_ms ?? null;
-  const lfhf = hrv.lf_hf_ratio ?? null;
-  const meanIBI = ibi.length ? (ibi.reduce((a, b) => a + b, 0) / ibi.length) : null;
-  const stressIndex = hrv.stress_index ?? null;
+  const stressScore = hrv.stress_index !== undefined && hrv.stress_index !== null ? Math.round(hrv.stress_index) : null;
+  const stress = stressScore !== null ? (stressScore >= 60 ? 'High' : stressScore >= 30 ? 'Medium' : 'Low') : 'Unknown';
 
   const reportId = generateReportId();
   const subjectId = generateSubjectId();
@@ -364,9 +360,9 @@ function buildReportHTML(result: RPPGResult): string {
       <div class="range">Avg. Variability: ${fmt(rmssd, 0)}ms</div>
     </div>
     <div class="vital-cell">
-      <div class="label">Stress Level</div>
-      <div class="value" style="color:${stressColor}">${stress}</div>
-      <div class="range">Index: ${stressIndex !== null ? fmt(stressIndex, 0) : '--'}/100</div>
+      <div class="label">Stress Score</div>
+      <div class="value" style="color:${stressColor}">${stressScore !== null ? stressScore : '--'}<span class="unit">/100</span></div>
+      <div class="range">Level: ${stress}</div>
     </div>
   </div>
 </div>
@@ -409,7 +405,7 @@ function buildReportHTML(result: RPPGResult): string {
     <td>LF/HF Ratio</td><td>${fmt(lfhf, 2)}</td>
   </tr>
   <tr>
-    <td>Stress Level Index</td><td>${stressIndex !== null ? fmt(stressIndex, 0) : '--'} (${stress})</td>
+    <td>Stress Index Score</td><td>${stressScore !== null ? stressScore : '--'} / 100</td>
     <td>Motion Fraction</td><td>${fmt(result.motion_fraction !== undefined ? result.motion_fraction * 100 : null, 1)}%</td>
   </tr>
 </table>

@@ -559,7 +559,7 @@ export default function RecordScreen() {
 
         <View style={{ flex: 1 }} />
 
-        {/* Signal quality bar + triage mode (during recording) */}
+        {/* Signal quality bar (during recording) */}
         {isRecording && (
           <View style={styles.metricsArea}>
             <View style={styles.triagePill}>
