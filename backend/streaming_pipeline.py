@@ -59,6 +59,7 @@ class RealtimeRPPGPipeline:
         self.frame_rotation_flag = None
 
         self.current_metric = StreamMetric(bpm=None, confidence=0.0, method="pending")
+        self.last_estimated_fps = 30.0
 
     def close(self):
         """Releases system resources."""
@@ -72,6 +73,7 @@ class RealtimeRPPGPipeline:
         self.invalid_streak = 0
         self.frame_rotation_flag = None
         self.current_metric = StreamMetric(bpm=None, confidence=0.0, method="pending")
+        self.last_estimated_fps = 30.0
 
     def ingest(self, frame_bgr: np.ndarray, ts_ms: int) -> Dict[str, Any]:
         """
@@ -195,17 +197,31 @@ class RealtimeRPPGPipeline:
         )
 
     def _effective_fps(self) -> float:
-        if len(self.sample_ts_ms) < 2:
-            return float(self.fps)
+        """
+        Calculates the effective frame rate using a rolling window of recent
+        timestamps to avoid poisoning the estimate with early startup jitter.
+        """
+        # Use only the last 100 samples (covering ~3-5 seconds of history)
+        window = self.sample_ts_ms[-101:]
+        if len(window) < 2:
+            return float(self.last_estimated_fps)
 
-        ts = np.asarray(self.sample_ts_ms, dtype=np.float64)
+        ts = np.asarray(window, dtype=np.float64)
         dt = np.diff(ts) / 1000.0
-        dt = dt[dt > 1e-3]
+        dt = dt[dt > 0.005]  # Filter out duplicate/impossible timestamps (<200fps)
+        
         if dt.size == 0:
-            return float(self.fps)
+            return float(self.last_estimated_fps)
 
+        # Use median to resist individual outlier outliers
         median_dt = float(np.median(dt))
-        if median_dt <= 0:
-            return float(self.fps)
+        raw_fps = 1.0 / median_dt if median_dt > 0 else 30.0
 
-        return float(np.clip(1.0 / median_dt, 2.0, self.max_effective_fps))
+        # Apply smoothing to prevent jitter in algorithmic load-bearing constants.
+        # We use a larger alpha during the startup phase to converge faster.
+        alpha = 0.1 if len(self.sample_ts_ms) > 50 else 0.4
+        smoothed_fps = (alpha * raw_fps) + ((1.0 - alpha) * self.last_estimated_fps)
+
+        # Absolute physiological/hardware safety clamp
+        self.last_estimated_fps = float(np.clip(smoothed_fps, 5.0, self.max_effective_fps))
+        return self.last_estimated_fps

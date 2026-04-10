@@ -38,11 +38,21 @@ async def _handle_client(websocket, pipeline: RealtimeRPPGPipeline, config: Dict
             if frame is None: continue
             
             res = pipeline.ingest(frame, int(time.time() * 1000))
+            
+            stride = config.get("stride", 3)
+            overlay = None
+            if frame_count % stride == 0:
+                overlay = _encode_jpeg(
+                    res["overlay"], 
+                    quality=config.get("quality", 45), 
+                    max_side=config.get("max_side", 320)
+                )
+
             await websocket.send(json.dumps({
                 "type": "frame_result",
                 "bpm": res["metric"].bpm,
                 "has_face": res["has_face"],
-                "overlay": _encode_jpeg(res["overlay"], quality=50, max_side=320) if frame_count % 3 == 0 else None
+                "overlay": overlay
             }))
             frame_count += 1
             continue
@@ -53,6 +63,11 @@ async def _handle_client(websocket, pipeline: RealtimeRPPGPipeline, config: Dict
             msg_type = data.get("type")
 
             if msg_type == "start":
+                # Allow client to override default server-side config
+                if "overlay_quality" in data: config["quality"] = int(data["overlay_quality"])
+                if "overlay_max_side" in data: config["max_side"] = int(data["overlay_max_side"])
+                if "overlay_stride" in data: config["stride"] = int(data["overlay_stride"])
+                
                 await websocket.send(json.dumps({"type": "ack", "status": "ready"}))
             
             elif msg_type == "stop":
@@ -85,7 +100,7 @@ async def run_server(host, port, **kwargs):
             "stride": kwargs.get("overlay_stride", 2)
         }
         try:
-            await _handle_client(ws, pipeline, {}) # Config dict is now unused
+            await _handle_client(ws, pipeline, config)
         finally:
             pipeline.close()
 

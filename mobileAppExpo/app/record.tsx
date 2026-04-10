@@ -442,10 +442,6 @@ export default function RecordScreen() {
     );
   }
 
-  const qualityW = qualityAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ["0%", "100%"],
-  });
   const dashOffset = CIRC * (1 - progress);
 
   return (
@@ -729,57 +725,6 @@ const styles = StyleSheet.create({
   },
 
   // Metrics during recording
-  metricsArea: { paddingHorizontal: Spacing.lg, marginBottom: Spacing.sm },
-  triagePill: {
-    flexDirection: "row",
-    alignItems: "center",
-    alignSelf: "center",
-    backgroundColor: "rgba(57,68,188,0.15)",
-    borderRadius: Radius.full,
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    marginBottom: 10,
-    gap: 6,
-  },
-  triageText: {
-    fontFamily: "SpaceGrotesk-Medium",
-    fontSize: 11,
-    color: "rgba(57,68,188,0.9)",
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
-  },
-  qualityBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderRadius: Radius.md,
-    padding: Spacing.md,
-  },
-  qualityLabel: {
-    fontFamily: "SpaceGrotesk-Medium",
-    fontSize: 10,
-    color: "rgba(255,255,255,0.4)",
-    width: 64,
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
-  },
-  qualityTrack: {
-    flex: 1,
-    height: 3,
-    backgroundColor: "rgba(255,255,255,0.12)",
-    borderRadius: 2,
-    marginHorizontal: 10,
-    overflow: "hidden",
-  },
-  qualityFill: { height: "100%", borderRadius: 2 },
-  qualityPct: {
-    fontFamily: "SpaceGrotesk-Regular",
-    fontSize: 13,
-    color: "rgba(255,255,255,0.5)",
-    width: 36,
-    textAlign: "right",
-  },
-
   // Tips — below oval
   tipsCard: {
     marginHorizontal: Spacing.lg,
