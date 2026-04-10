@@ -43,8 +43,7 @@ async def _handle_client(websocket, pipeline: RealtimeRPPGPipeline, config: Dict
                 "bpm": res["metric"].bpm,
                 "confidence": res["metric"].confidence,
                 "has_face": res["has_face"],
-                "identity_match": res.get("identity_match", True),
-                "overlay": _encode_jpeg(res["overlay"], config["quality"], config["max_side"]) if frame_count % config["stride"] == 0 else None
+                "overlay": _encode_jpeg(res["overlay"], quality=50, max_side=320) if frame_count % 3 == 0 else None
             }))
             frame_count += 1
             continue
@@ -55,11 +54,6 @@ async def _handle_client(websocket, pipeline: RealtimeRPPGPipeline, config: Dict
             msg_type = data.get("type")
 
             if msg_type == "start":
-                config.update({
-                    "quality": data.get("overlay_quality", config["quality"]),
-                    "max_side": data.get("overlay_max_side", config["max_side"]),
-                    "stride": data.get("overlay_stride", config["stride"]),
-                })
                 await websocket.send(json.dumps({"type": "ack", "status": "ready"}))
             
             elif msg_type == "stop":
@@ -92,7 +86,7 @@ async def run_server(host, port, **kwargs):
             "stride": kwargs.get("overlay_stride", 2)
         }
         try:
-            await _handle_client(ws, pipeline, config)
+            await _handle_client(ws, pipeline, {}) # Config dict is now unused
         finally:
             pipeline.close()
 

@@ -45,26 +45,22 @@ def main():
     args = p.parse_args()
     
     if args.mode == "preview" or args.preview:
-        run_local_preview(args.model_path, args.fps)
+        run_local_preview(args.model_path)
     else:
         asyncio.run(
             run_server(
                 host=args.ws_host,
                 port=args.ws_port,
-                fps=args.fps,
                 model_path=args.model_path,
-                jpeg_quality=args.jpeg_quality,
-                overlay_max_side=args.overlay_max_side,
-                overlay_stride=args.overlay_stride,
             )
         )
 
-def run_local_preview(model_path: str, target_fps: float):
+def run_local_preview(model_path: str):
     """
     Launches a local OpenCV window using the laptop webcam to visualize ROI tracking.
     """
     print(f"📸 Starting local preview using webcam... (Model: {model_path})")
-    pipeline = RealtimeRPPGPipeline(model_path=model_path, fps=target_fps)
+    pipeline = RealtimeRPPGPipeline(model_path=model_path)
     cap = cv2.VideoCapture(0)
     
     if not cap.isOpened():

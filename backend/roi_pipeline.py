@@ -54,10 +54,8 @@ _EXCLUDE_LIPS = [
 
 ROI_COLORS = {"face": (0, 140, 255)}
 MIN_ROI_PIXELS = 1
-_ERODE_KERNEL = np.ones((5, 5), np.uint8)
 MIN_FACE_AREA_RATIO = 0.08
 MAX_FACE_AREA_RATIO = 0.75
-MIN_SKIN_PIXELS = 100 # Reduced threshold as requested
 
 
 @dataclass
@@ -208,24 +206,10 @@ class FaceROIExtractor:
             int(lm[:, 1].max() - lm[:, 1].min()),
         )
 
-        quality_score, checks = _evaluate_human_face_guardrails(
-            frame_bgr, face_mask, bbox
-        )
-        if quality_score < 0.5:
-            self.stats["low_quality"] += 1
-            if not checks["area"]: self.stats["rej_area"] += 1
-            if not checks["skin"]: self.stats["rej_skin"] += 1
+        # Simplified: all detected faces are quality=1.0. Reliability is handled downstream.
+        quality_score = 1.0
 
-        crops = {}
-        for roi_name, mask in masks.items():
-            ys, xs = np.where(mask > 0)
-            if ys.size:
-                y1, y2 = ys.min(), ys.max()
-                x1, x2 = xs.min(), xs.max()
-                roi_crop = frame_bgr[y1 : y2 + 1, x1 : x2 + 1]
-                crops[roi_name] = cv2.resize(roi_crop, (64, 64))
-            else:
-                crops[roi_name] = np.zeros((64, 64, 3), dtype=np.uint8)
+        crops = {} # Removed per request: not used in rPPG
 
         return ROIResult(
             masks,
@@ -263,7 +247,8 @@ def _build_masks(lm: np.ndarray, h: int, w: int, skin_m: Optional[np.ndarray] = 
         pts = lm[indices].astype(np.int32)
         cv2.fillPoly(base_mask, [pts], 0)
 
-    mask = cv2.erode(base_mask, _ERODE_KERNEL, iterations=1)
+    # Morphological erosion removed to improve temporal stability
+    mask = base_mask
     if skin_m is not None:
         mask = cv2.bitwise_and(mask, skin_m)
 
@@ -272,52 +257,7 @@ def _build_masks(lm: np.ndarray, h: int, w: int, skin_m: Optional[np.ndarray] = 
     return masks, px_counts
 
 
-def _evaluate_human_face_guardrails(
-    frame_bgr: np.ndarray,
-    face_mask: np.ndarray,
-    bbox: Tuple[int, int, int, int],
-) -> Tuple[float, Dict[str, bool]]:
-    """Simplistic face gate: check for basic area and minimum skin presence."""
-    h, w = frame_bgr.shape[:2]
-    _, _, bw, bh = bbox
-    face_area_ratio = float((bw * bh) / max(1, w * h))
-    area_ok = MIN_FACE_AREA_RATIO <= face_area_ratio <= MAX_FACE_AREA_RATIO
 
-    skin_ratio_ycrcb, skin_ratio_hsv, _ = _estimate_skin_consistency(frame_bgr, face_mask)
-    total_face_px = int(np.count_nonzero(face_mask > 0))
-    skin_px = max(int(skin_ratio_ycrcb * total_face_px), int(skin_ratio_hsv * total_face_px))
-    skin_ok = skin_px >= MIN_SKIN_PIXELS
-
-    checks = {"area": area_ok, "skin": skin_ok}
-    quality_score = 1.0 if (area_ok and skin_ok) else 0.5
-    return quality_score, checks
-
-
-def _estimate_skin_consistency(
-    frame_bgr: np.ndarray, face_mask: np.ndarray
-) -> Tuple[float, float, float]:
-    face_pixels = face_mask > 0
-    total_face_px = int(np.count_nonzero(face_pixels))
-    if total_face_px == 0:
-        return 0.0, 0.0, 0.0
-
-    ycrcb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2YCrCb)
-    y, cr, cb = cv2.split(ycrcb)
-    skin_ycrcb = (y >= 40) & (cr >= 133) & (cr <= 173) & (cb >= 77) & (cb <= 127)
-
-    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
-    h, s, v = cv2.split(hsv)
-    skin_hsv = (h >= 0) & (h <= 25) & (s >= 30) & (s <= 180) & (v >= 40) & (v <= 255)
-
-    skin_ycrcb_face = skin_ycrcb & face_pixels
-    skin_hsv_face = skin_hsv & face_pixels
-    intersection = int(np.count_nonzero(skin_ycrcb_face & skin_hsv_face))
-    union = int(np.count_nonzero(skin_ycrcb_face | skin_hsv_face))
-
-    skin_ratio_ycrcb = float(np.count_nonzero(skin_ycrcb_face) / total_face_px)
-    skin_ratio_hsv = float(np.count_nonzero(skin_hsv_face) / total_face_px)
-    skin_iou = float(intersection / max(1, union))
-    return skin_ratio_ycrcb, skin_ratio_hsv, skin_iou
 
 
 def get_mean_rgb(frame: np.ndarray, mask: np.ndarray):

@@ -2,8 +2,8 @@
 High-performance streaming pipeline for real-time rPPG analysis.
 
 Designed specifically for low-latency feedback in mobile and web applications. 
-This module handles incremental frame ingestion, biometric identity locking, 
-and signal extraction using the POS algorithm.
+This module handles incremental frame ingestion and signal extraction 
+using the POS algorithm.
 """
 from __future__ import annotations
 
@@ -44,19 +44,10 @@ class RealtimeRPPGPipeline:
     def __init__(
         self,
         model_path: str = "face_landmarker.task",
-        fps: float = 30.0,
-        pos_min_frames: int = 48,
-        update_stride: int = 4,
-        live_pos_window_sec: float = 8.0,
-        max_effective_fps: float = 120.0,
     ):
-        self.fps = float(fps)
-        self.pos_min_frames = int(pos_min_frames)
-        self.update_stride = max(1, int(update_stride))
-        self.live_pos_window_sec = max(4.0, float(live_pos_window_sec))
-        self.max_effective_fps = max(30.0, float(max_effective_fps))
-        self.pos_min_seconds = max(2.0, self.pos_min_frames / max(self.fps, 1e-6))
-        self.update_interval_seconds = max(0.3, self.update_stride / max(self.fps, 1e-6))
+        self.fps = 30.0
+        self.live_pos_window_sec = 8.0
+        self.max_effective_fps = 120.0
         self._last_fps_log_n = 0
 
         self.roi_extractor = FaceROIExtractor(model_path)
@@ -74,7 +65,7 @@ class RealtimeRPPGPipeline:
         self.roi_extractor.close()
 
     def reset(self):
-        """Clears all session-specific buffers and resets the biometric lock."""
+        """Clears all session-specific buffers."""
         self.rgb_samples.clear()
         self.sample_ts_ms.clear()
         self.frame_idx = 0
@@ -103,9 +94,6 @@ class RealtimeRPPGPipeline:
                 "overlay": frame_bgr,
                 "metric": self.current_metric,
                 "has_face": False,
-                "identity_locked": False,
-                "identity_match": True,
-                "intruder_detected": False,
             }
 
         overlay = overlay_roi(working_frame, roi_res.masks)
@@ -134,9 +122,6 @@ class RealtimeRPPGPipeline:
             "overlay": overlay,
             "metric": self.current_metric,
             "has_face": True,
-            "identity_locked": False,
-            "identity_match": True,
-            "intruder_detected": False,
         }
 
     def finalize(self) -> Dict[str, Any]:

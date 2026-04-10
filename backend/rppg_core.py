@@ -13,8 +13,6 @@ from scipy.signal import (
     filtfilt,
     find_peaks,
     lfilter,
-    medfilt,
-    savgol_filter,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -120,37 +118,10 @@ def detrend_rgb(rgb):
     return result
 
 
-def detect_motion_frames(rgb_raw, threshold=2.5):
-    """
-    Identifies frames with excessive pixel intensity jumps.
-
-    Computes the mean absolute difference between consecutive frames and flags 
-    those that deviate significantly from the baseline.
-
-    Args:
-        rgb_raw (np.ndarray): raw RGB data.
-        threshold (float, optional): standard deviation factor for rejection.
-
-    Returns:
-        np.ndarray: A boolean mask where True indicates a high-motion frame.
-    """
-    diff = np.abs(np.diff(rgb_raw, axis=0))
-    frame_motion = diff.mean(axis=1)
-    motion_threshold = np.mean(frame_motion) + threshold * np.std(frame_motion)
-    bad_frames = np.concatenate([[False], frame_motion > motion_threshold])
-    return bad_frames
 
 
-def remove_motion_artifacts(pulse, fps):
-    """
-    Smoothes the pulse signal using a Savitzky-Golay filter to preserve 
-    peak shapes while removing high-frequency noise.
-    """
-    window = max(5, int(fps * 0.133) | 1)
-    poly = min(3, window - 1)
-    if window > poly:
-        return savgol_filter(pulse, window_length=window, polyorder=poly)
-    return pulse
+
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -228,20 +199,14 @@ def extract_pulse_waveform(pulse, fps):
     duration_sec = len(clean_pulse) / fps
     min_expected_peaks = max(2, int(duration_sec * 0.5))
 
-    threshold_levels = [
-        {"height": 0.20, "prominence": 0.20},
-        {"height": 0.10, "prominence": 0.12},
-        {"height": 0.05, "prominence": 0.06},
-    ]
-
-    peaks_idx, ibi_ms = np.array([]), np.array([])
-    for params in threshold_levels:
-        peaks_idx, _ = find_peaks(clean_pulse, distance=min_distance, **params)
-        if len(peaks_idx) >= 2:
-            ibi_ms = (np.diff(peaks_idx) / fps) * 1000
-            ibi_ms = ibi_ms[(ibi_ms >= 200) & (ibi_ms <= 2000)]
-        if len(peaks_idx) >= min_expected_peaks and len(ibi_ms) >= 2:
-            break
+    # Simplified peak detection: single reliable threshold
+    peaks_idx, _ = find_peaks(clean_pulse, distance=min_distance, height=0.15, prominence=0.15)
+    
+    if len(peaks_idx) >= 2:
+        ibi_ms = (np.diff(peaks_idx) / fps) * 1000
+        ibi_ms = ibi_ms[(ibi_ms >= 200) & (ibi_ms <= 2000)]
+    else:
+        ibi_ms = np.array([])
 
     return peaks_idx, ibi_ms, clean_pulse
 
@@ -265,29 +230,11 @@ def compute_confidence_score(pulse, fps, ibi_ms):
         Tuple[float, dict, bool]: (Final 0-1 score, detail metrics, reliability flag).
     """
     """
-    Computes a 0–1 confidence score based on IBI regularity, SNR,
-    peak density, and data duration. Returns (score, details, is_reliable).
+    Simplified confidence scoring based on SNR and peak consistency.
     """
     details = {}
-    duration = len(pulse) / fps
-
-    # 1. IBI Regularity (0.30)
-    if len(ibi_ms) >= 3:
-        cv = np.std(ibi_ms) / (np.mean(ibi_ms) + 1e-8)
-        reg_score = float(np.clip(1.0 - (cv / 0.40), 0.0, 1.0))
-    elif len(ibi_ms) >= 1:
-        reg_score = (
-            0.4
-            if len(ibi_ms) == 1
-            else float(
-                np.clip(1.0 - (np.std(ibi_ms) / np.mean(ibi_ms) / 0.40), 0.0, 1.0)
-            )
-            * 0.7
-        )
-    else:
-        reg_score = 0.0
-
-    # 2. SNR (0.35)
+    
+    # 1. SNR Score (0.60)
     fft = np.abs(np.fft.rfft(pulse))
     freqs = np.fft.rfftfreq(len(pulse), d=1.0 / fps)
     hr_mask = (freqs >= LOW_HZ) & (freqs <= HIGH_HZ)
@@ -297,43 +244,29 @@ def compute_confidence_score(pulse, fps, ibi_ms):
         p_idx = np.argmax(hr_fft)
         peak_pwr = hr_fft[p_idx] ** 2
         peak_f = hr_freqs[p_idx]
-        noise_mask = (np.abs(hr_freqs - peak_f) > 0.15) & (
-            np.abs(hr_freqs - 2 * peak_f) > 0.15
-        )
+        noise_mask = (np.abs(hr_freqs - peak_f) > 0.15)
         if noise_mask.any():
-            snr_score = float(
-                np.clip(
-                    (peak_pwr / (np.mean(hr_fft[noise_mask] ** 2) + 1e-10)) / 12.0,
-                    0.0,
-                    1.0,
-                )
-            )
+            snr_score = float(np.clip((peak_pwr / (np.mean(hr_fft[noise_mask] ** 2) + 1e-10)) / 10.0, 0.0, 1.0))
         details["dominant_bpm"] = float(peak_f * 60)
 
-    # 3. Peak Density (0.15) — cover full clinical HR range: 30–300 BPM
-    if len(ibi_ms) >= 1:
+    # 2. Peak Density Score (0.40)
+    # Checks if detected peaks match physiological BPM
+    if len(ibi_ms) >= 2:
         bpm = 60000.0 / np.mean(ibi_ms)
-        density_score = 1.0 if 30 <= bpm <= 300 else 0.2
+        density_score = 1.0 if 45 <= bpm <= 220 else 0.3
     else:
-        density_score = 0.1 if 30 <= details.get("dominant_bpm", 0) <= 300 else 0.0
+        density_score = 0.0
 
-    # 4. Data Duration (0.20)
-    data_score = float(np.clip(duration / 15.0, 0.0, 1.0))
+    final_score = float(0.6 * snr_score + 0.4 * density_score)
+    is_reliable = final_score >= 0.40
 
-    scores = [reg_score, snr_score, density_score, data_score]
-    final_score = float(np.dot(scores, [0.30, 0.35, 0.15, 0.20]))
-    is_reliable = final_score >= 0.45
-
-    details.update(
-        {
-            "final_score": final_score,
-            "is_reliable": is_reliable,
-            "ibi_regularity": reg_score,
-            "snr": snr_score,
-            "density": density_score,
-            "duration": data_score,
-        }
-    )
+    details.update({
+        "final_score": final_score,
+        "is_reliable": is_reliable,
+        "snr": snr_score,
+        "peak_count": len(ibi_ms) + 1 if len(ibi_ms) > 0 else 0,
+        "density": density_score,
+    })
     return final_score, details, is_reliable
 
 
@@ -444,12 +377,8 @@ def process_rppg(
     Returns:
         dict: comprehensive results containing 'pulse_signal', 'ibi_ms', 'confidence', etc.
     """
-    # 1. Motion
-    if motion_scores is not None:
-        motion_fraction = float((motion_scores > 0.05).mean())
-    else:
-        bad_frames = detect_motion_frames(rgb_raw)
-        motion_fraction = float(bad_frames.mean())
+    # Motion pre-filtering removed per request. POS handles noise internally.
+    motion_fraction = 0.0
 
     # 2. Preprocess (POS needs channel means intact)
     rgb_detrended = detrend_rgb(rgb_raw)
@@ -479,7 +408,7 @@ def _summarize_pulse(
     method_used: str,
     n_frames: int,
 ) -> dict:
-    pulse = remove_motion_artifacts(pulse, fps)
+    # remove_motion_artifacts (Savgol) removed to prevent signal distortion
     peaks_idx, ibi_ms, clean_pulse = extract_pulse_waveform(pulse, fps)
     confidence, details, is_reliable = compute_confidence_score(clean_pulse, fps, ibi_ms)
     hrv_features = compute_hrv_features(ibi_ms)
