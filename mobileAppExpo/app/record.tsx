@@ -15,7 +15,7 @@ const { width, height: screenH } = Dimensions.get('window');
 const RECORD_DURATION = 30;
 const CIRC_R = 54;
 const CIRC = 2 * Math.PI * CIRC_R;
-const STREAM_FRAME_INTERVAL_MS = 100;
+const STREAM_FRAME_INTERVAL_MS = 0; // Use 0 for maximum possible FPS (limited only by device hardware/capture speed)
 const STREAM_CAPTURE_QUALITY = 0.45;
 
 // ── Snackbar ──
