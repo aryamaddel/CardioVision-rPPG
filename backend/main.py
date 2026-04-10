@@ -145,7 +145,11 @@ def run_local_preview(model_path: str):
                     continue
 
                 last_ts_seen = ts
-                res = pipeline.ingest(f, ts)
+                try:
+                    res = pipeline.ingest(f, ts)
+                except Exception as e:
+                    print(f"[roi_worker] ingest error: {e}")
+                    continue
                 ov = res["overlay"].copy()
                 m = res["metric"]
 

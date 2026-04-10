@@ -49,7 +49,6 @@ _EXCLUDE_LIPS = [
     39,
     40,
     185,
-    61,
 ]
 
 ROI_COLORS = {"face": (0, 140, 255)}
@@ -111,7 +110,8 @@ class VideoSource:
                 if drift > 0:
                     time.sleep(drift)
         else:
-            src_fps, out_count, src_count, next_yield = self.orig_fps, 0, 0, 0.0
+            src_fps = self.orig_fps
+            out_count, src_count = 0, 0
             while True:
                 ret, frame = self._cap.read()
                 if not ret:
@@ -119,9 +119,9 @@ class VideoSource:
                 elapsed = out_count / self.target_fps
                 if max_duration is not None and elapsed >= max_duration:
                     break
-                if src_count / src_fps >= next_yield:
+                # Integer arithmetic prevents floating-point drift over long videos
+                if src_count * self.target_fps >= out_count * src_fps:
                     yield elapsed, frame
-                    next_yield += 1.0 / self.target_fps
                     out_count += 1
                 src_count += 1
 
@@ -197,6 +197,12 @@ class FaceROIExtractor:
         cv2.fillPoly(face_mask, [hull], 255)
 
         masks, px_counts = _build_masks(lm, h, w)
+
+        # Enforce minimum ROI pixel count — reject near-empty masks that would
+        # produce meaningless mean RGB values (e.g. extreme face angle/occlusion).
+        if px_counts.get("face", 0) < MIN_ROI_PIXELS:
+            self.stats["low_quality"] += 1
+            return None
 
         bbox = (
             int(lm[:, 0].min()),

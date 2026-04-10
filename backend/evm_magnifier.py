@@ -80,16 +80,12 @@ def _gaussian_pyramid(img: np.ndarray, levels: int) -> list[np.ndarray]:
 
 def _upsample_to(img: np.ndarray, target_h: int, target_w: int) -> np.ndarray:
     """
-    Iteratively upsample using pyrUp until we reach (target_h, target_w).
-    pyrUp doubles size, so we keep going until we match or exceed target,
-    then do a final bilinear resize to exactly match.
+    Directly resize the coarsest Gaussian pyramid level to the target resolution
+    using bilinear interpolation. This is equivalent to the iterative pyrUp loop
+    (both preserve the heavy spatial blur from downsampling) but eliminates the
+    intermediate allocations for each doubling step.
     """
-    cur = img
-    while cur.shape[0] < target_h or cur.shape[1] < target_w:
-        cur = cv2.pyrUp(cur)
-    if cur.shape[0] != target_h or cur.shape[1] != target_w:
-        cur = cv2.resize(cur, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
-    return cur
+    return cv2.resize(img, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
 
 
 # ── IIR Butterworth bandpass ──────────────────────────────────────────────────
@@ -177,6 +173,8 @@ class EulerianMagnifier:
 
         # ── 4. Lazy init IIR state ────────────────────────────────────────────
         if self._zi is None or (h, w) != self._frame_shape:
+            if self._frame_shape is not None and (h, w) != self._frame_shape:
+                print(f"[EVM] Resolution changed {self._frame_shape} → {(h, w)}, resetting filter state")
             self._frame_shape = (h, w)
             self._init_state(h, w)
             self._warmup_frames = 0

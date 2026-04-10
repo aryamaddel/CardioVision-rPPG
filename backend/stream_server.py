@@ -63,6 +63,9 @@ async def _handle_client(websocket, pipeline: RealtimeRPPGPipeline, config: Dict
             msg_type = data.get("type")
 
             if msg_type == "start":
+                # Reset pipeline so a new session doesn't inherit stale FPS
+                # smoothing state or buffer contents from a previous stop/start cycle.
+                pipeline.reset()
                 # Allow client to override default server-side config
                 if "overlay_quality" in data: config["quality"] = int(data["overlay_quality"])
                 if "overlay_max_side" in data: config["max_side"] = int(data["overlay_max_side"])

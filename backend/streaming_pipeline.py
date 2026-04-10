@@ -192,7 +192,10 @@ class RealtimeRPPGPipeline:
             and result["ibi_ms"].size > 0
         ):
             bpm = float(60000.0 / np.median(result["ibi_ms"]))
-
+            # Exponential smoothing to suppress frame-to-frame BPM jitter
+            alpha = 0.2
+            if self.current_metric.bpm is not None:
+                bpm = alpha * bpm + (1 - alpha) * self.current_metric.bpm
         self.current_metric = StreamMetric(
             bpm=bpm,
             confidence=confidence,

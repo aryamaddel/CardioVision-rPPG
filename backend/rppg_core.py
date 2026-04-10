@@ -13,6 +13,7 @@ from scipy.signal import (
     filtfilt,
     find_peaks,
     lfilter,
+    welch,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -110,12 +111,8 @@ def detrend_rgb(rgb):
     Returns:
         np.ndarray: The detrended RGB signal.
     """
-    result = np.zeros_like(rgb, dtype=np.float64)
-    for i in range(3):
-        channel = rgb[:, i].astype(np.float64)
-        ch_mean = np.mean(channel)
-        result[:, i] = detrend(channel, type="linear") + ch_mean
-    return result
+    means = rgb.mean(axis=0)
+    return detrend(rgb.astype(np.float64), axis=0, type="linear") + means
 
 
 
@@ -162,6 +159,8 @@ def pos_algorithm(rgb, fps, window_sec=4.0):
         pulse[start:end] += H
         weights[start:end] += 1
 
+    if np.all(weights == 0):
+        return np.zeros(N)
     pulse /= weights + 1e-8
     return bandpass_filter(pulse, fps)
 
@@ -177,34 +176,32 @@ def extract_pulse_waveform(pulse, fps):
     """
     Extracts peak indices and Inter-Beat Intervals (IBI) from raw pulse data.
 
-    Normalizes the signal and uses adaptive peak detection with multiple 
-    threshold levels to find consistent beats. Filters IBI to valid 
-    physiological ranges (300ms to 1500ms).
+    Normalizes the signal and uses adaptive peak detection to find consistent
+    beats. Filters IBI to the valid physiological range matching the 45–220 BPM
+    display confidence window (273–1333 ms).
 
     Args:
         pulse (np.ndarray): The 1D input pulse signal.
         fps (float): Sampling rate.
 
     Returns:
-        Tuple[np.ndarray, np.ndarray, np.ndarray]: (Peak indices, IBI values in ms, 
+        Tuple[np.ndarray, np.ndarray, np.ndarray]: (Peak indices, IBI values in ms,
             normalized pulse waveform).
     """
-    """Extract clinical-grade features: peaks, IBI, and normalized waveform."""
     p_min, p_max = pulse.min(), pulse.max()
     if p_max - p_min < 1e-8:
         return np.array([]), np.array([]), pulse
     clean_pulse = 2 * (pulse - p_min) / (p_max - p_min) - 1
 
     min_distance = max(1, int(fps * 0.4))
-    duration_sec = len(clean_pulse) / fps
-    min_expected_peaks = max(2, int(duration_sec * 0.5))
 
-    # Simplified peak detection: single reliable threshold
+    # Single reliable threshold
     peaks_idx, _ = find_peaks(clean_pulse, distance=min_distance, height=0.15, prominence=0.15)
-    
+
     if len(peaks_idx) >= 2:
         ibi_ms = (np.diff(peaks_idx) / fps) * 1000
-        ibi_ms = ibi_ms[(ibi_ms >= 200) & (ibi_ms <= 2000)]
+        # Match the 45–220 BPM display range: 60000/220 ≈ 273 ms, 60000/45 ≈ 1333 ms
+        ibi_ms = ibi_ms[(ibi_ms >= 273) & (ibi_ms <= 1333)]
     else:
         ibi_ms = np.array([])
 
@@ -233,24 +230,20 @@ def compute_confidence_score(pulse, fps, ibi_ms):
     Simplified confidence scoring based on SNR and peak consistency.
     """
     details = {}
-    
-    # 1. SNR Score (0.60)
+
+    # 1. SNR Score (0.60) — uses shared spectral_peak_snr
+    raw_snr = spectral_peak_snr(pulse, fps)
+    snr_score = float(np.clip(raw_snr / 10.0, 0.0, 1.0))
+
+    # Annotate dominant BPM from FFT peak
     fft = np.abs(np.fft.rfft(pulse))
     freqs = np.fft.rfftfreq(len(pulse), d=1.0 / fps)
     hr_mask = (freqs >= LOW_HZ) & (freqs <= HIGH_HZ)
-    snr_score = 0.0
-    if hr_mask.any() and fft[hr_mask].sum() > 0:
-        hr_fft, hr_freqs = fft[hr_mask], freqs[hr_mask]
-        p_idx = np.argmax(hr_fft)
-        peak_pwr = hr_fft[p_idx] ** 2
-        peak_f = hr_freqs[p_idx]
-        noise_mask = (np.abs(hr_freqs - peak_f) > 0.15)
-        if noise_mask.any():
-            snr_score = float(np.clip((peak_pwr / (np.mean(hr_fft[noise_mask] ** 2) + 1e-10)) / 10.0, 0.0, 1.0))
+    if hr_mask.any():
+        peak_f = freqs[hr_mask][np.argmax(fft[hr_mask])]
         details["dominant_bpm"] = float(peak_f * 60)
 
-    # 2. Peak Density Score (0.40)
-    # Checks if detected peaks match physiological BPM
+    # 2. Peak Density Score (0.40) — matches 45–220 BPM window
     if len(ibi_ms) >= 2:
         bpm = 60000.0 / np.mean(ibi_ms)
         density_score = 1.0 if 45 <= bpm <= 220 else 0.3
@@ -296,21 +289,22 @@ def compute_hrv_features(ibi_ms):
     rmssd = np.sqrt(np.mean(diff**2)) if len(diff) > 0 else 0.0
     sdnn = np.std(ibi_sec)
 
-    # Frequency-Domain
+    # Frequency-Domain — resample IBI to a uniform 4 Hz grid before Welch
     try:
-        from scipy.signal import welch
-
-        fs_interp = 1.0 / np.mean(ibi_sec)
-        nperseg = min(len(ibi_sec), 256)
-        if nperseg > 0:
-            freqs, psd = welch(ibi_sec, fs=fs_interp, nperseg=nperseg)
+        # Cumulative time stamps from IBI series (in seconds)
+        ibi_cumtime = np.cumsum(ibi_sec)
+        t_start, t_end = ibi_cumtime[0], ibi_cumtime[-1]
+        fs_interp = 4.0  # 4 Hz uniform grid is standard for HRV PSD
+        t_uniform = np.arange(t_start, t_end, 1.0 / fs_interp)
+        if len(t_uniform) >= 4:
+            ibi_uniform = np.interp(t_uniform, ibi_cumtime, ibi_sec)
+            nperseg = min(len(ibi_uniform), 256)
+            freqs, psd = welch(ibi_uniform, fs=fs_interp, nperseg=nperseg)
             lf_band = (freqs >= 0.04) & (freqs <= 0.15)
             hf_band = (freqs >= 0.15) & (freqs <= 0.4)
             df = freqs[1] - freqs[0] if len(freqs) > 1 else 0.0
-
             lf_power = np.sum(psd[lf_band]) * df
             hf_power = np.sum(psd[hf_band]) * df
-
             lf_hf = lf_power / hf_power if hf_power > 0 else 0.0
         else:
             lf_hf = 0.0
