@@ -569,20 +569,18 @@ export default function ResultsScreen() {
                 <Text
                   style={[styles.loadingTitle, { color: colors.textPrimary }]}
                 >
-                  Finalizing Deep rPPG Analysis
+                  Analyzing Cardiac Signal
                 </Text>
               </View>
               <Text
                 style={[styles.loadingBody, { color: colors.textTertiary }]}
               >
-                POS metrics are ready. PhysFormer + fusion outputs are still
-                being computed.
+                Extracting heart rate and HRV metrics using POS chrominance-based filtering.
               </Text>
               <View style={{ gap: 10, marginTop: 12 }}>
                 <LoadingBlock colors={colors} width="62%" height={14} />
                 <LoadingBlock colors={colors} width="100%" height={10} />
                 <LoadingBlock colors={colors} width="86%" height={10} />
-                <LoadingBlock colors={colors} width="72%" height={10} />
               </View>
             </View>
           )}
@@ -595,7 +593,9 @@ export default function ResultsScreen() {
               ]}
             >
               <Text style={styles.failTitle}>Signal Could Not Be Computed</Text>
-              <Text style={styles.failBody}>{failReasonText}</Text>
+              <Text style={styles.failBody}>
+                {failReason ?? "Insufficient valid face frames. Keep face centered and well-lit."}
+              </Text>
             </View>
           )}
 

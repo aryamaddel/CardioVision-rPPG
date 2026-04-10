@@ -261,29 +261,14 @@ export default function RecordScreen() {
           setQuality(frame.metric?.confidence ?? frame.confidence ?? 0);
           setLiveBpm(frame.metric?.bpm ?? frame.bpm ?? null);
           setLiveMethod(frame.metric?.method ?? frame.method ?? "pending");
-          // No overlay display needed — we use SVG ROI highlights instead.
-          if (
-            frame.intruder_detected ||
-            (frame.identity_locked && !frame.identity_match)
-          ) {
-            setIsTimerPaused(true);
-            pausedRef.current = true;
-            setPauseReason("unknown_person");
-            setSnack({
-              msg: "Unknown person seen. Waiting for original person to return.",
-              show: true,
-              key: Date.now(),
-            });
-            return;
-          }
 
           if (!frame.has_face) {
-            if (frame.identity_locked) {
+            if (!pausedRef.current) {
               setIsTimerPaused(true);
               pausedRef.current = true;
               setPauseReason("face_lost");
               setSnack({
-                msg: "Primary face lost. Timer paused until face is back.",
+                msg: "Face lost. Timer paused.",
                 show: true,
                 key: Date.now(),
               });
@@ -296,7 +281,7 @@ export default function RecordScreen() {
             pausedRef.current = false;
             setPauseReason("none");
             setSnack({
-              msg: "Primary face reacquired. Timer resumed.",
+              msg: "Face reacquired. Resuming...",
               show: true,
               key: Date.now(),
             });
@@ -562,14 +547,6 @@ export default function RecordScreen() {
         {/* Signal quality bar (during recording) */}
         {isRecording && (
           <View style={styles.metricsArea}>
-            <View style={styles.triagePill}>
-              <Ionicons
-                name="shield-checkmark-outline"
-                size={14}
-                color={accent.light}
-              />
-              <Text style={styles.triageText}>Biometric Mode</Text>
-            </View>
             <View style={styles.qualityBar}>
               <Text style={styles.qualityLabel}>Signal Quality</Text>
               <View style={styles.qualityTrack}>
@@ -594,7 +571,6 @@ export default function RecordScreen() {
               { icon: "sunny-outline", tip: "Ensure your face is well-lit" },
               { icon: "resize-outline", tip: "Keep phone at arm's length" },
               { icon: "body-outline", tip: "Remain still during recording" },
-              { icon: "contrast-outline", tip: "Avoid backlit environments" },
             ].map((t, i) => (
               <View key={i} style={styles.tipRow}>
                 <Ionicons
