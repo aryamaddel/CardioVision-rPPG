@@ -356,7 +356,6 @@ export default function RecordScreen() {
       const snap = await camRef.current.takePictureAsync({
         base64: true,
         quality: STREAM_CAPTURE_QUALITY,
-        skipProcessing: true,
         shutterSound: false,
       });
       if (snap?.base64) {
@@ -376,7 +375,7 @@ export default function RecordScreen() {
     if (!usingLiveStreamRef.current) {
       try {
         camRef.current?.stopRecording();
-      } catch {}
+      } catch { }
       const fallbackVideo = await fallbackVideoPromiseRef.current;
       fallbackVideoPromiseRef.current = null;
       if (fallbackVideo?.uri) {
@@ -425,7 +424,7 @@ export default function RecordScreen() {
     if (!usingLiveStreamRef.current) {
       try {
         camRef.current?.stopRecording();
-      } catch {}
+      } catch { }
     }
     liveClientRef.current?.disconnect();
     liveClientRef.current = null;
@@ -482,8 +481,7 @@ export default function RecordScreen() {
         ref={camRef}
         style={StyleSheet.absoluteFill}
         facing="front"
-        mode="video"
-        videoQuality="720p"
+        mute={true}
       />
       {/* Overlay disabled: we show SVG ROI highlights instead of server-streamed overlay */}
       <View style={styles.overlay} />
