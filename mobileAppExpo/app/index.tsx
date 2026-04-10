@@ -8,7 +8,7 @@ import * as Haptics from 'expo-haptics';
 import * as DocumentPicker from 'expo-document-picker';
 import Svg, { Path, Line, Circle as SvgCircle, Defs, LinearGradient as SvgLinGrad, Stop } from 'react-native-svg';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme, Typography, Spacing, Radius, Shadows } from './theme';
+import { useTheme, Typography, Spacing, Radius, Shadows } from '../theme';
 
 const { width } = Dimensions.get('window');
 

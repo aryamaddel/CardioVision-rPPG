@@ -16,16 +16,16 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import Svg, { Path, Circle, Line, Rect } from 'react-native-svg';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme, Typography, Spacing, Radius, Shadows, HealthTipsData } from './theme';
-import type { RPPGResult } from './api/rppgService';
-import { generateAndShareReport } from './api/reportGenerator';
+import { useTheme, Typography, Spacing, Radius, Shadows, HealthTipsData } from '../theme';
+import type { RPPGResult } from '../api/rppgService';
+import { generateAndShareReport } from '../api/reportGenerator';
 import {
   clearPendingScanResult,
   clearScanSession,
   getPendingScanResult,
   getScanSession,
   setScanSession,
-} from './state/scanSession';
+} from '../state/scanSession';
 
 const { width } = Dimensions.get('window');
 

@@ -7,9 +7,9 @@ import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import Svg, { Circle, Ellipse, Rect, Text as SvgText } from 'react-native-svg';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme, Typography, Spacing, Radius } from './theme';
-import { LiveRPPGClient, getMockResult, type RPPGResult } from './api/rppgService';
-import { clearScanSession, setPendingScanResult, setScanSession } from './state/scanSession';
+import { useTheme, Typography, Spacing, Radius } from '../theme';
+import { LiveRPPGClient, getMockResult, type RPPGResult } from '../api/rppgService';
+import { clearScanSession, setPendingScanResult, setScanSession } from '../state/scanSession';
 
 const { width, height: screenH } = Dimensions.get('window');
 const RECORD_DURATION = 30;
@@ -146,10 +146,10 @@ export default function RecordScreen() {
         overlayQuality: 20,
         overlayMaxSide: 0,
         overlayStride: 999,
-        onFrame: (frame) => {
-          setQuality(frame.metric.confidence ?? 0);
-          setLiveBpm(frame.metric.bpm ?? null);
-          setLiveMethod(frame.metric.method ?? 'pending');
+        onFrame: (frame: any) => {
+          setQuality(frame.metric?.confidence ?? frame.confidence ?? 0);
+          setLiveBpm(frame.metric?.bpm ?? frame.bpm ?? null);
+          setLiveMethod(frame.metric?.method ?? frame.method ?? 'pending');
           // No overlay display needed — we use SVG ROI highlights instead.
           if (frame.intruder_detected || (frame.identity_locked && !frame.identity_match)) {
             setIsTimerPaused(true);

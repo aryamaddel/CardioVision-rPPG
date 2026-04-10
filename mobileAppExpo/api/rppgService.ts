@@ -73,13 +73,17 @@ interface LiveMetric {
 
 interface LiveFrameResult {
   type: 'frame_result';
-  metric: LiveMetric;
+  metric?: LiveMetric;
+  bpm?: number | null;
+  confidence?: number;
+  method?: string;
   has_face: boolean;
-  method_changed: boolean;
-  identity_locked: boolean;
-  identity_match: boolean;
-  intruder_detected: boolean;
-  overlay_jpeg_b64: string | null;
+  method_changed?: boolean;
+  identity_locked?: boolean;
+  identity_match?: boolean;
+  intruder_detected?: boolean;
+  overlay_jpeg_b64?: string | null;
+  overlay?: string | null;
 }
 
 type LiveSocketMessage =
