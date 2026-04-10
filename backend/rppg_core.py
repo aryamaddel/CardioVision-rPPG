@@ -141,31 +141,16 @@ def detect_motion_frames(rgb_raw, threshold=2.5):
     return bad_frames
 
 
-def remove_motion_artifacts(pulse, fps, method="savgol"):
+def remove_motion_artifacts(pulse, fps):
     """
-    Smoothes the pulse signal to mitigate sharp motion-induced spikes.
-
-    Supports Median filtering, Savitzky-Golay filtering, or a combination of 
-    both to preserve peak shapes while removing high-frequency noise.
-
-    Args:
-        pulse (np.ndarray): The 1D BVP signal.
-        fps (float): Sampling rate.
-        method (str, optional): 'median', 'savgol', or 'both'. Defaults to 'savgol'.
-
-    Returns:
-        np.ndarray: The cleaned pulse signal.
+    Smoothes the pulse signal using a Savitzky-Golay filter to preserve 
+    peak shapes while removing high-frequency noise.
     """
-    cleaned = pulse.copy()
-    if method in ("median", "both"):
-        kernel = max(3, int(fps * 0.067) | 1)
-        cleaned = medfilt(cleaned, kernel_size=kernel)
-    if method in ("savgol", "both"):
-        window = max(5, int(fps * 0.133) | 1)
-        poly = min(3, window - 1)
-        if window > poly:
-            cleaned = savgol_filter(cleaned, window_length=window, polyorder=poly)
-    return cleaned
+    window = max(5, int(fps * 0.133) | 1)
+    poly = min(3, window - 1)
+    if window > poly:
+        return savgol_filter(pulse, window_length=window, polyorder=poly)
+    return pulse
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -494,7 +479,7 @@ def _summarize_pulse(
     method_used: str,
     n_frames: int,
 ) -> dict:
-    pulse = remove_motion_artifacts(pulse, fps, method="savgol")
+    pulse = remove_motion_artifacts(pulse, fps)
     peaks_idx, ibi_ms, clean_pulse = extract_pulse_waveform(pulse, fps)
     confidence, details, is_reliable = compute_confidence_score(clean_pulse, fps, ibi_ms)
     hrv_features = compute_hrv_features(ibi_ms)

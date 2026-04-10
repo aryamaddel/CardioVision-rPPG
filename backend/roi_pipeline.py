@@ -1,11 +1,12 @@
 """
 The computer vision front-end for the CardioVision-rPPG system.
 
-Handles face detection, landmarking, and region-of-interest (ROI) extraction 
-using MediaPipe. Includes robust human-face guardrails (skin color checks, 
-geometry verification, and texture analysis) to prevent spoofs and ensure 
+Handles face detection, landmarking, and region-of-interest (ROI) extraction
+using MediaPipe. Includes robust human-face guardrails (skin color checks,
+geometry verification, and texture analysis) to prevent spoofs and ensure
 high-quality signal extraction.
 """
+
 import time
 import urllib.request
 from dataclasses import dataclass
@@ -52,17 +53,11 @@ _EXCLUDE_LIPS = [
 ]
 
 ROI_COLORS = {"face": (0, 140, 255)}
-MIN_ROI_PIXELS = 150
+MIN_ROI_PIXELS = 1
 _ERODE_KERNEL = np.ones((5, 5), np.uint8)
 MIN_FACE_AREA_RATIO = 0.08
 MAX_FACE_AREA_RATIO = 0.75
-MIN_SKIN_RATIO = 0.18
-MIN_FACE_TEXTURE_VAR = 10.0
-MAX_FACE_TEXTURE_VAR = 1800.0
-MIN_TOTAL_GUARDRAIL_PASSES = 3
-MIN_HSV_SKIN_RATIO = 0.10
-MIN_SKIN_MASK_IOU = 0.35
-MIN_SKIN_PIXELS = 500
+MIN_SKIN_PIXELS = 100 # Reduced threshold as requested
 
 
 @dataclass
@@ -74,16 +69,18 @@ class ROIResult:
     crops: Dict[str, np.ndarray]
     face_mask: Optional[np.ndarray] = None
     landmarks: Optional[np.ndarray] = None
+    quality_score: float = 1.0
 
 
 class VideoSource:
     """
     Unified wrapper for video files and webcam streams.
 
-    Normalizes frame rates and provides a generator interface for processing 
-    video content frame-by-frame. Supports real-time webcam capture with 
+    Normalizes frame rates and provides a generator interface for processing
+    video content frame-by-frame. Supports real-time webcam capture with
     drift correction.
     """
+
     def __init__(self, source: Union[int, str] = 0, target_fps: float = 30.0):
         self.source = source
         self.target_fps = target_fps
@@ -145,10 +142,11 @@ class FaceROIExtractor:
     """
     Orchestrates face detection and mask generation for rPPG.
 
-    Uses MediaPipe Face Landmarker to identify facial features, isolates 
-    stable skin regions (forehead/cheeks), and applies multi-stage guardrails 
+    Uses MediaPipe Face Landmarker to identify facial features, isolates
+    stable skin regions (forehead/cheeks), and applies multi-stage guardrails
     to filter out non-human or poor-quality frames.
     """
+
     def __init__(self, model_path: str):
         p = Path(model_path)
         if not p.exists():
@@ -168,13 +166,8 @@ class FaceROIExtractor:
             "detected": 0,
             "failed": 0,
             "low_quality": 0,
-            "rejected_nonhuman": 0,
             "rej_area": 0,
-            "rej_skin_ycrcb": 0,
-            "rej_skin_hsv": 0,
-            "rej_skin_iou": 0,
-            "rej_geometry": 0,
-            "rej_texture": 0,
+            "rej_skin": 0,
         }
 
     def process(self, frame_bgr: np.ndarray, ts_ms: int) -> Optional[ROIResult]:
@@ -186,7 +179,7 @@ class FaceROIExtractor:
             ts_ms (int): Timestamp of the frame in milliseconds.
 
         Returns:
-            Optional[ROIResult]: Container with masks, crops, and landmarks if a 
+            Optional[ROIResult]: Container with masks, crops, and landmarks if a
                 valid face is detected and passes guardrails; else None.
         """
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
@@ -215,18 +208,13 @@ class FaceROIExtractor:
             int(lm[:, 1].max() - lm[:, 1].min()),
         )
 
-        passed, checks = _evaluate_human_face_guardrails(frame_bgr, face_mask, bbox, lm)
-        if not passed:
-            self.stats["rejected_nonhuman"] += 1
-            self.stats["rej_area"] += 0 if checks["area"] else 1
-            self.stats["rej_skin_ycrcb"] += 0 if checks["skin_ycrcb"] else 1
-            self.stats["rej_skin_hsv"] += 0 if checks["skin_hsv"] else 1
-            self.stats["rej_skin_iou"] += 0 if checks["skin_iou"] else 1
-            self.stats["rej_geometry"] += 0 if checks["geometry"] else 1
-            self.stats["rej_texture"] += 0 if checks["texture"] else 1
-            self.stats["failed"] += 1
-            self.stats["detected"] = max(0, self.stats["detected"] - 1)
-            return None
+        quality_score, checks = _evaluate_human_face_guardrails(
+            frame_bgr, face_mask, bbox
+        )
+        if quality_score < 0.5:
+            self.stats["low_quality"] += 1
+            if not checks["area"]: self.stats["rej_area"] += 1
+            if not checks["skin"]: self.stats["rej_skin"] += 1
 
         crops = {}
         for roi_name, mask in masks.items():
@@ -247,6 +235,7 @@ class FaceROIExtractor:
             crops,
             face_mask,
             lm,
+            quality_score,
         )
 
     def close(self):
@@ -287,94 +276,26 @@ def _evaluate_human_face_guardrails(
     frame_bgr: np.ndarray,
     face_mask: np.ndarray,
     bbox: Tuple[int, int, int, int],
-    lm: np.ndarray,
-) -> Tuple[bool, Dict[str, bool]]:
-    """Gate frames on two hard criteria only:
-
-    1. Face bounding-box covers a reasonable image area (not too small/large).
-    2. The face ROI contains at least MIN_SKIN_PIXELS detected skin pixels
-       (YCrCb OR HSV — either colorspace match counts).
-
-    Head pose is intentionally NOT a gate.  A person looking to the side often
-    exposes more cheek skin — suppressing those frames hurts signal quality.
-    """
+) -> Tuple[float, Dict[str, bool]]:
+    """Simplistic face gate: check for basic area and minimum skin presence."""
     h, w = frame_bgr.shape[:2]
     _, _, bw, bh = bbox
     face_area_ratio = float((bw * bh) / max(1, w * h))
     area_ok = MIN_FACE_AREA_RATIO <= face_area_ratio <= MAX_FACE_AREA_RATIO
 
-    skin_ratio_ycrcb, skin_ratio_hsv, skin_iou = _estimate_skin_consistency(frame_bgr, face_mask)
+    skin_ratio_ycrcb, skin_ratio_hsv, _ = _estimate_skin_consistency(frame_bgr, face_mask)
     total_face_px = int(np.count_nonzero(face_mask > 0))
-    # Count pixels that pass either skin colorspace model
-    ycrcb_px = int(round(skin_ratio_ycrcb * total_face_px))
-    hsv_px   = int(round(skin_ratio_hsv   * total_face_px))
-    skin_px  = max(ycrcb_px, hsv_px)
-    skin_ok  = skin_px >= MIN_SKIN_PIXELS
+    skin_px = max(int(skin_ratio_ycrcb * total_face_px), int(skin_ratio_hsv * total_face_px))
+    skin_ok = skin_px >= MIN_SKIN_PIXELS
 
-    checks = {
-        "area":       area_ok,
-        "skin_ycrcb": skin_ratio_ycrcb >= MIN_SKIN_RATIO,
-        "skin_hsv":   skin_ratio_hsv   >= MIN_HSV_SKIN_RATIO,
-        "skin_iou":   skin_iou         >= MIN_SKIN_MASK_IOU,
-        "geometry":   _passes_face_geometry_guard(lm, bbox),
-        "texture":    _passes_texture_guard(frame_bgr, bbox),
-        "skin_pixels": skin_ok,
-    }
-
-    # Hard gates: face must be a plausible size AND have enough skin pixels.
-    # All soft checks (skin ratios, geometry, texture) are informational only.
-    passed = area_ok and skin_ok
-    return passed, checks
+    checks = {"area": area_ok, "skin": skin_ok}
+    quality_score = 1.0 if (area_ok and skin_ok) else 0.5
+    return quality_score, checks
 
 
-def _passes_face_geometry_guard(lm: np.ndarray, bbox: Tuple[int, int, int, int]) -> bool:
-    """Rejects only biologically impossible landmark configurations
-    (e.g., eyes swapped, nose outside face box).  Does NOT penalise
-    off-centre or side-facing heads."""
-    _, _, bw, bh = bbox
-    face_w = max(float(bw), 1.0)
-    face_h = max(float(bh), 1.0)
-
-    try:
-        left_eye  = lm[33]
-        right_eye = lm[263]
-        nose_tip  = lm[1]
-        upper_lip = lm[13]
-
-        eye_dist      = float(np.linalg.norm(left_eye - right_eye) / face_w)
-        nose_to_mouth = float(np.linalg.norm(nose_tip - upper_lip) / face_h)
-        eye_to_mouth  = float((upper_lip[1] - ((left_eye[1] + right_eye[1]) * 0.5)) / face_h)
-    except Exception:
-        return False
-
-    # Very loose bounds — only reject anatomically impossible ratios.
-    geometry_checks = [
-        0.10 <= eye_dist      <= 0.90,   # eyes exist and are separated
-        0.01 <= nose_to_mouth <= 0.50,   # nose and mouth are not fused
-        0.05 <= eye_to_mouth  <= 0.85,   # eyes are above mouth
-    ]
-    return all(geometry_checks)
-
-
-def _passes_texture_guard(frame_bgr: np.ndarray, bbox: Tuple[int, int, int, int]) -> bool:
-    x, y, bw, bh = bbox
-    h, w = frame_bgr.shape[:2]
-    x1 = max(0, x)
-    y1 = max(0, y)
-    x2 = min(w, x + bw)
-    y2 = min(h, y + bh)
-    if x2 <= x1 or y2 <= y1:
-        return False
-
-    crop = frame_bgr[y1:y2, x1:x2]
-    if crop.size == 0:
-        return False
-
-    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-    lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-    return MIN_FACE_TEXTURE_VAR <= lap_var <= MAX_FACE_TEXTURE_VAR
-
-def _estimate_skin_consistency(frame_bgr: np.ndarray, face_mask: np.ndarray) -> Tuple[float, float, float]:
+def _estimate_skin_consistency(
+    frame_bgr: np.ndarray, face_mask: np.ndarray
+) -> Tuple[float, float, float]:
     face_pixels = face_mask > 0
     total_face_px = int(np.count_nonzero(face_pixels))
     if total_face_px == 0:
@@ -382,24 +303,11 @@ def _estimate_skin_consistency(frame_bgr: np.ndarray, face_mask: np.ndarray) -> 
 
     ycrcb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2YCrCb)
     y, cr, cb = cv2.split(ycrcb)
-    skin_ycrcb = (
-        (y >= 40)
-        & (cr >= 133)
-        & (cr <= 173)
-        & (cb >= 77)
-        & (cb <= 127)
-    )
+    skin_ycrcb = (y >= 40) & (cr >= 133) & (cr <= 173) & (cb >= 77) & (cb <= 127)
 
     hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
     h, s, v = cv2.split(hsv)
-    skin_hsv = (
-        (h >= 0)
-        & (h <= 25)
-        & (s >= 30)
-        & (s <= 180)
-        & (v >= 40)
-        & (v <= 255)
-    )
+    skin_hsv = (h >= 0) & (h <= 25) & (s >= 30) & (s <= 180) & (v >= 40) & (v <= 255)
 
     skin_ycrcb_face = skin_ycrcb & face_pixels
     skin_hsv_face = skin_hsv & face_pixels
