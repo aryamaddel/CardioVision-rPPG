@@ -1,4 +1,4 @@
-import type { RPPGResult } from '../api/rppgService';
+import type { RPPGResult } from "../api/rppgService";
 
 interface ScanSession {
   result: RPPGResult | null;

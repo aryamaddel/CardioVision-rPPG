@@ -1,20 +1,20 @@
 // src/api/reportGenerator.ts — PDF Report Generator (mirrors LaTeX template)
-import * as Print from 'expo-print';
-import * as Sharing from 'expo-sharing';
-import * as FileSystem from 'expo-file-system';
-import type { RPPGResult } from './rppgService';
+import * as Print from "expo-print";
+import * as Sharing from "expo-sharing";
+import * as FileSystem from "expo-file-system";
+import type { RPPGResult } from "./rppgService";
 
 // ────────────────────────────────────────────────────────────────────
 // Helper Utils
 // ────────────────────────────────────────────────────────────────────
 const fmt = (v: number | null | undefined, d: number = 1): string =>
-  v !== null && v !== undefined && !isNaN(v) ? v.toFixed(d) : '--';
+  v !== null && v !== undefined && !isNaN(v) ? v.toFixed(d) : "--";
 
 function generateReportId(): string {
   const now = new Date();
   const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  const d = String(now.getDate()).padStart(2, '0');
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
   const seq = String(Math.floor(Math.random() * 9000) + 1000);
   return `RPPG-${y}-${m}${d}-${seq}`;
 }
@@ -24,33 +24,43 @@ function generateSubjectId(): string {
 }
 
 function formatDate(): string {
-  return new Date().toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
+  return new Date().toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
   });
 }
 
 function getStressColor(level: string): string {
   switch (level) {
-    case 'High': return '#DC2626';
-    case 'Medium': return '#D97706';
-    case 'Low': return '#16A34A';
-    default: return '#6B7280';
+    case "High":
+      return "#DC2626";
+    case "Medium":
+      return "#D97706";
+    case "Low":
+      return "#16A34A";
+    default:
+      return "#6B7280";
   }
 }
 
 function confidenceLabel(score: number): string {
-  if (score >= 0.7) return 'High';
-  if (score >= 0.45) return 'Medium';
-  return 'Low';
+  if (score >= 0.7) return "High";
+  if (score >= 0.45) return "Medium";
+  return "Low";
 }
 
 // ────────────────────────────────────────────────────────────────────
 // SVG Waveform Generator (for the pulse chart in the report)
 // ────────────────────────────────────────────────────────────────────
-function generateWaveformSVG(signal: number[], peaks: number[], width = 560, height = 120): string {
-  if (!signal || signal.length === 0) return '<p style="text-align:center;color:#999;">No waveform data available</p>';
+function generateWaveformSVG(
+  signal: number[],
+  peaks: number[],
+  width = 560,
+  height = 120,
+): string {
+  if (!signal || signal.length === 0)
+    return '<p style="text-align:center;color:#999;">No waveform data available</p>';
 
   const step = Math.max(1, Math.floor(signal.length / 280));
   const data = signal.filter((_, i) => i % step === 0);
@@ -65,24 +75,24 @@ function generateWaveformSVG(signal: number[], peaks: number[], width = 560, hei
   });
 
   const peakDots = peaks
-    .filter(p => p % step === 0)
-    .map(p => Math.floor(p / step))
-    .filter(p => p < data.length)
-    .map(p => {
+    .filter((p) => p % step === 0)
+    .map((p) => Math.floor(p / step))
+    .filter((p) => p < data.length)
+    .map((p) => {
       const x = (p / (data.length - 1)) * width;
       const y = height - ((data[p] - min) / range) * (height - 20) - 10;
       return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3" fill="#19507D" opacity="0.7"/>`;
     })
-    .join('\n');
+    .join("\n");
 
   return `
     <svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
       <!-- Grid lines -->
-      ${[0.25, 0.5, 0.75].map(f => `<line x1="0" y1="${height * (1 - f)}" x2="${width}" y2="${height * (1 - f)}" stroke="#E5E7EB" stroke-width="0.5"/>`).join('\n')}
+      ${[0.25, 0.5, 0.75].map((f) => `<line x1="0" y1="${height * (1 - f)}" x2="${width}" y2="${height * (1 - f)}" stroke="#E5E7EB" stroke-width="0.5"/>`).join("\n")}
       <!-- Filled area -->
-      <path d="M${pts.join(' L')} L${width},${height} L0,${height} Z" fill="rgba(25,80,125,0.08)"/>
+      <path d="M${pts.join(" L")} L${width},${height} L0,${height} Z" fill="rgba(25,80,125,0.08)"/>
       <!-- Line -->
-      <path d="M${pts.join(' L')}" stroke="#19507D" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+      <path d="M${pts.join(" L")}" stroke="#19507D" stroke-width="1.5" fill="none" stroke-linecap="round"/>
       <!-- Peak markers -->
       ${peakDots}
       <!-- Axes -->
@@ -95,20 +105,27 @@ function generateWaveformSVG(signal: number[], peaks: number[], width = 560, hei
 // ────────────────────────────────────────────────────────────────────
 // IBI Histogram SVG
 // ────────────────────────────────────────────────────────────────────
-function generateIBIHistogramSVG(ibi: number[], width = 560, height = 80): string {
-  if (!ibi || ibi.length < 2) return '<p style="text-align:center;color:#999;">No IBI data available</p>';
+function generateIBIHistogramSVG(
+  ibi: number[],
+  width = 560,
+  height = 80,
+): string {
+  if (!ibi || ibi.length < 2)
+    return '<p style="text-align:center;color:#999;">No IBI data available</p>';
 
   const min = Math.min(...ibi);
   const max = Math.max(...ibi);
   const range = max - min || 1;
-  const barW = Math.max(3, (width / ibi.length) - 2);
+  const barW = Math.max(3, width / ibi.length - 2);
 
-  const bars = ibi.map((v, i) => {
-    const x = i * (width / ibi.length);
-    const barH = ((v - min) / range) * (height - 16) + 8;
-    const opacity = (0.25 + ((v - min) / range) * 0.55).toFixed(2);
-    return `<rect x="${(x + 1).toFixed(1)}" y="${(height - barH).toFixed(1)}" width="${barW.toFixed(1)}" height="${barH.toFixed(1)}" rx="2" fill="#19507D" opacity="${opacity}"/>`;
-  }).join('\n');
+  const bars = ibi
+    .map((v, i) => {
+      const x = i * (width / ibi.length);
+      const barH = ((v - min) / range) * (height - 16) + 8;
+      const opacity = (0.25 + ((v - min) / range) * 0.55).toFixed(2);
+      return `<rect x="${(x + 1).toFixed(1)}" y="${(height - barH).toFixed(1)}" width="${barW.toFixed(1)}" height="${barH.toFixed(1)}" rx="2" fill="#19507D" opacity="${opacity}"/>`;
+    })
+    .join("\n");
 
   return `
     <svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
@@ -126,41 +143,81 @@ function generateRecommendations(result: RPPGResult): string[] {
   // Autonomic balance
   const lfhf = hrv.lf_hf_ratio ?? 0;
   if (lfhf > 1.5) {
-    recs.push('<b>Autonomic Balance:</b> The LF/HF ratio (' + fmt(lfhf, 2) + ') suggests sympathetic dominance. Deep breathing exercises (4-7-8 pattern) or guided meditation may help restore parasympathetic tone.');
+    recs.push(
+      "<b>Autonomic Balance:</b> The LF/HF ratio (" +
+        fmt(lfhf, 2) +
+        ") suggests sympathetic dominance. Deep breathing exercises (4-7-8 pattern) or guided meditation may help restore parasympathetic tone.",
+    );
   } else if (lfhf > 1.0) {
-    recs.push('<b>Autonomic Balance:</b> The LF/HF ratio (' + fmt(lfhf, 2) + ') is within a mildly elevated range. Regular relaxation practices are recommended.');
+    recs.push(
+      "<b>Autonomic Balance:</b> The LF/HF ratio (" +
+        fmt(lfhf, 2) +
+        ") is within a mildly elevated range. Regular relaxation practices are recommended.",
+    );
   } else {
-    recs.push('<b>Autonomic Balance:</b> The LF/HF ratio (' + fmt(lfhf, 2) + ') indicates healthy parasympathetic-sympathetic balance.');
+    recs.push(
+      "<b>Autonomic Balance:</b> The LF/HF ratio (" +
+        fmt(lfhf, 2) +
+        ") indicates healthy parasympathetic-sympathetic balance.",
+    );
   }
 
   // Signal quality
   const conf = result.confidence ?? 0;
   if (conf >= 0.7) {
-    recs.push('<b>Signal Quality:</b> Signal integrity was optimal (' + Math.round(conf * 100) + '%). Results are considered highly reliable.');
+    recs.push(
+      "<b>Signal Quality:</b> Signal integrity was optimal (" +
+        Math.round(conf * 100) +
+        "%). Results are considered highly reliable.",
+    );
   } else if (conf >= 0.45) {
-    recs.push('<b>Signal Quality:</b> Signal quality was moderate (' + Math.round(conf * 100) + '%). Results should be interpreted with some caution. Re-scan in well-lit conditions for improved accuracy.');
+    recs.push(
+      "<b>Signal Quality:</b> Signal quality was moderate (" +
+        Math.round(conf * 100) +
+        "%). Results should be interpreted with some caution. Re-scan in well-lit conditions for improved accuracy.",
+    );
   } else {
-    recs.push('<b>Signal Quality:</b> Signal quality was below clinical threshold (' + Math.round(conf * 100) + '%). A repeat scan under controlled lighting with minimal motion is strongly recommended.');
+    recs.push(
+      "<b>Signal Quality:</b> Signal quality was below clinical threshold (" +
+        Math.round(conf * 100) +
+        "%). A repeat scan under controlled lighting with minimal motion is strongly recommended.",
+    );
   }
 
   // RMSSD + recovery
   const rmssd = hrv.rmssd_ms ?? 0;
   if (rmssd < 30) {
-    recs.push('<b>Recovery:</b> RMSSD (' + fmt(rmssd) + ' ms) is below 30 ms, suggesting limited cardiac recovery capacity. Consider reviewing sleep hygiene, hydration, and physical recovery markers.');
+    recs.push(
+      "<b>Recovery:</b> RMSSD (" +
+        fmt(rmssd) +
+        " ms) is below 30 ms, suggesting limited cardiac recovery capacity. Consider reviewing sleep hygiene, hydration, and physical recovery markers.",
+    );
   } else if (rmssd < 50) {
-    recs.push('<b>Recovery:</b> RMSSD (' + fmt(rmssd) + ' ms) is in the moderate range. Maintaining regular sleep/wake cycles and moderate exercise is recommended.');
+    recs.push(
+      "<b>Recovery:</b> RMSSD (" +
+        fmt(rmssd) +
+        " ms) is in the moderate range. Maintaining regular sleep/wake cycles and moderate exercise is recommended.",
+    );
   }
 
   // Stress
   const stressIndex = hrv.stress_index ?? 0;
   if (stressIndex >= 60) {
-    recs.push('<b>Stress Management:</b> Elevated stress detected (Score: ' + fmt(stressIndex, 0) + '). Consider incorporating structured breaks, mindfulness practices, or physical activity into your daily routine.');
+    recs.push(
+      "<b>Stress Management:</b> Elevated stress detected (Score: " +
+        fmt(stressIndex, 0) +
+        "). Consider incorporating structured breaks, mindfulness practices, or physical activity into your daily routine.",
+    );
   }
 
   // BPM
   const bpm = result.bpm;
   if (bpm !== null && bpm !== undefined && bpm > 100) {
-    recs.push('<b>Heart Rate:</b> Resting heart rate (' + Math.round(bpm) + ' BPM) is elevated. If consistently above 100 BPM at rest, medical consultation is advised.');
+    recs.push(
+      "<b>Heart Rate:</b> Resting heart rate (" +
+        Math.round(bpm) +
+        " BPM) is elevated. If consistently above 100 BPM at rest, medical consultation is advised.",
+    );
   }
 
   return recs;
@@ -172,17 +229,36 @@ function generateRecommendations(result: RPPGResult): string[] {
 function buildReportHTML(result: RPPGResult): string {
   const hrv = result.hrv_features ?? ({} as any);
   const ibi = result.ibi_ms ?? [];
-  const bpm = result.bpm ?? (ibi.length ? Math.round(60000 / (ibi.reduce((a, b) => a + b, 0) / ibi.length)) : null);
+  const bpm =
+    result.bpm ??
+    (ibi.length
+      ? Math.round(60000 / (ibi.reduce((a, b) => a + b, 0) / ibi.length))
+      : null);
   const conf = result.confidence ?? 0;
-  const stressScore = hrv.stress_index !== undefined && hrv.stress_index !== null ? Math.round(hrv.stress_index) : null;
-  const stress = stressScore !== null ? (stressScore >= 60 ? 'High' : stressScore >= 30 ? 'Medium' : 'Low') : 'Unknown';
+  const stressScore =
+    hrv.stress_index !== undefined && hrv.stress_index !== null
+      ? Math.round(hrv.stress_index)
+      : null;
+  const stress =
+    stressScore !== null
+      ? stressScore >= 60
+        ? "High"
+        : stressScore >= 30
+          ? "Medium"
+          : "Low"
+      : "Unknown";
 
   const reportId = generateReportId();
   const subjectId = generateSubjectId();
   const date = formatDate();
   const stressColor = getStressColor(stress);
-  const methodLabel = (result.method_used ?? 'pos').replace('_', '+').toUpperCase();
-  const waveformSVG = generateWaveformSVG(result.pulse_signal ?? [], result.peaks_idx ?? []);
+  const methodLabel = (result.method_used ?? "pos")
+    .replace("_", "+")
+    .toUpperCase();
+  const waveformSVG = generateWaveformSVG(
+    result.pulse_signal ?? [],
+    result.peaks_idx ?? [],
+  );
   const ibiSVG = generateIBIHistogramSVG(ibi);
   const recommendations = generateRecommendations(result);
 
@@ -351,8 +427,8 @@ function buildReportHTML(result: RPPGResult): string {
   <div class="vitals-grid">
     <div class="vital-cell">
       <div class="label">Heart Rate (BPM)</div>
-      <div class="value">${bpm !== null ? Math.round(bpm) : '--'}<span class="unit">bpm</span></div>
-      <div class="range">${bpm !== null ? `Range: ${Math.max(0, Math.round(bpm! - 4))}-${Math.round(bpm! + 4)}` : 'N/A'}</div>
+      <div class="value">${bpm !== null ? Math.round(bpm) : "--"}<span class="unit">bpm</span></div>
+      <div class="range">${bpm !== null ? `Range: ${Math.max(0, Math.round(bpm! - 4))}-${Math.round(bpm! + 4)}` : "N/A"}</div>
     </div>
     <div class="vital-cell">
       <div class="label">HRV (Overall)</div>
@@ -361,7 +437,7 @@ function buildReportHTML(result: RPPGResult): string {
     </div>
     <div class="vital-cell">
       <div class="label">Stress Score</div>
-      <div class="value" style="color:${stressColor}">${stressScore !== null ? stressScore : '--'}<span class="unit">/100</span></div>
+      <div class="value" style="color:${stressColor}">${stressScore !== null ? stressScore : "--"}<span class="unit">/100</span></div>
       <div class="range">Level: ${stress}</div>
     </div>
   </div>
@@ -371,7 +447,7 @@ function buildReportHTML(result: RPPGResult): string {
 <div class="meta-row">
   <span><b>Method:</b> ${methodLabel}</span>
   <span><b>Duration:</b> ${fmt(result.duration_sec, 1)}s</span>
-  <span><b>Frames:</b> ${result.frames_processed ?? result.n_frames ?? '--'}</span>
+  <span><b>Frames:</b> ${result.frames_processed ?? result.n_frames ?? "--"}</span>
   <span><b>FPS:</b> ${fmt(result.fps, 1)}</span>
   <span><b>Confidence:</b> ${Math.round(conf * 100)}% (${confidenceLabel(conf)})</span>
 </div>
@@ -398,14 +474,14 @@ function buildReportHTML(result: RPPGResult): string {
   </tr>
   <tr>
     <td>RMSSD</td><td>${fmt(rmssd)} ms</td>
-    <td>Mean IBI</td><td>${meanIBI !== null ? fmt(meanIBI, 0) : '--'} ms</td>
+    <td>Mean IBI</td><td>${meanIBI !== null ? fmt(meanIBI, 0) : "--"} ms</td>
   </tr>
   <tr>
     <td>SDNN</td><td>${fmt(sdnn)} ms</td>
     <td>LF/HF Ratio</td><td>${fmt(lfhf, 2)}</td>
   </tr>
   <tr>
-    <td>Stress Index Score</td><td>${stressScore !== null ? stressScore : '--'} / 100</td>
+    <td>Stress Index Score</td><td>${stressScore !== null ? stressScore : "--"} / 100</td>
     <td>Motion Fraction</td><td>${fmt(result.motion_fraction !== undefined ? result.motion_fraction * 100 : null, 1)}%</td>
   </tr>
 </table>
@@ -416,22 +492,22 @@ function buildReportHTML(result: RPPGResult): string {
   <li>
     <b>IBI Regularity:</b>
     <span class="quality-bar-track"><span class="quality-bar-fill" style="width:${Math.round((confDetails.ibi_regularity ?? 0) * 100)}%"></span></span>
-    ${Math.round((confDetails.ibi_regularity ?? 0) * 100)}% — ${(confDetails.ibi_regularity ?? 0) >= 0.8 ? 'High stability in inter-beat intervals' : 'Moderate inter-beat interval consistency'}
+    ${Math.round((confDetails.ibi_regularity ?? 0) * 100)}% — ${(confDetails.ibi_regularity ?? 0) >= 0.8 ? "High stability in inter-beat intervals" : "Moderate inter-beat interval consistency"}
   </li>
   <li>
     <b>Spectral SNR:</b>
     <span class="quality-bar-track"><span class="quality-bar-fill" style="width:${Math.round((confDetails.snr ?? 0) * 100)}%"></span></span>
-    ${Math.round((confDetails.snr ?? 0) * 100)}% — ${(confDetails.snr ?? 0) >= 0.6 ? 'Signal-to-noise ratio within clinical threshold' : 'Moderate spectral signal quality'}
+    ${Math.round((confDetails.snr ?? 0) * 100)}% — ${(confDetails.snr ?? 0) >= 0.6 ? "Signal-to-noise ratio within clinical threshold" : "Moderate spectral signal quality"}
   </li>
   <li>
     <b>Peak Density:</b>
     <span class="quality-bar-track"><span class="quality-bar-fill" style="width:${Math.round((confDetails.density ?? 0) * 100)}%"></span></span>
-    ${Math.round((confDetails.density ?? 0) * 100)}% — ${(confDetails.density ?? 0) >= 0.8 ? 'Consistent peak detection' : 'Adequate peak detection rate'}
+    ${Math.round((confDetails.density ?? 0) * 100)}% — ${(confDetails.density ?? 0) >= 0.8 ? "Consistent peak detection" : "Adequate peak detection rate"}
   </li>
   <li>
     <b>Data Completeness:</b>
     <span class="quality-bar-track"><span class="quality-bar-fill" style="width:${Math.round((confDetails.duration ?? 0) * 100)}%"></span></span>
-    ${Math.round((confDetails.duration ?? 0) * 100)}% — ${(confDetails.duration ?? 0) >= 0.9 ? 'Minimal packet loss or facial occlusion' : 'Some data gaps detected'}
+    ${Math.round((confDetails.duration ?? 0) * 100)}% — ${(confDetails.duration ?? 0) >= 0.9 ? "Minimal packet loss or facial occlusion" : "Some data gaps detected"}
   </li>
 </ul>
 
@@ -439,7 +515,7 @@ function buildReportHTML(result: RPPGResult): string {
 <div class="recs-box">
   <div class="box-title">Clinical Recommendations</div>
   <ul>
-    ${recommendations.map(r => `<li>${r}</li>`).join('\n    ')}
+    ${recommendations.map((r) => `<li>${r}</li>`).join("\n    ")}
   </ul>
 </div>
 
@@ -462,31 +538,33 @@ function buildReportHTML(result: RPPGResult): string {
  * Generate a PDF from the rPPG result and share it.
  * Uses expo-print to render HTML → PDF and expo-sharing to present the share sheet.
  */
-export async function generateAndShareReport(result: RPPGResult): Promise<void> {
+export async function generateAndShareReport(
+  result: RPPGResult,
+): Promise<void> {
   const html = buildReportHTML(result);
 
   const { uri } = await Print.printToFileAsync({
     html,
-    width: 595,   // A4 width in points
-    height: 842,  // A4 height in points
+    width: 595, // A4 width in points
+    height: 842, // A4 height in points
   });
 
   // Rename to a descriptive filename
-  const newUri = uri.replace(/\/([^/]+)\.pdf$/i, '/CardioVision_Report.pdf');
+  const newUri = uri.replace(/\/([^/]+)\.pdf$/i, "/CardioVision_Report.pdf");
   try {
     // Try to rename the file for a nicer filename in share sheet
     await FileSystem.moveAsync({ from: uri, to: newUri });
     await Sharing.shareAsync(newUri, {
-      mimeType: 'application/pdf',
-      dialogTitle: 'Share CardioVision Report',
-      UTI: 'com.adobe.pdf',
+      mimeType: "application/pdf",
+      dialogTitle: "Share CardioVision Report",
+      UTI: "com.adobe.pdf",
     });
   } catch {
     // Fallback: share with original filename
     await Sharing.shareAsync(uri, {
-      mimeType: 'application/pdf',
-      dialogTitle: 'Share CardioVision Report',
-      UTI: 'com.adobe.pdf',
+      mimeType: "application/pdf",
+      dialogTitle: "Share CardioVision Report",
+      UTI: "com.adobe.pdf",
     });
   }
 }

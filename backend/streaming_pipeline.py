@@ -1,10 +1,11 @@
 """
 High-performance streaming pipeline for real-time rPPG analysis.
 
-Designed specifically for low-latency feedback in mobile and web applications. 
-This module handles incremental frame ingestion and signal extraction 
+Designed specifically for low-latency feedback in mobile and web applications.
+This module handles incremental frame ingestion and signal extraction
 using the POS algorithm.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -14,7 +15,6 @@ import cv2
 import numpy as np
 
 from roi_pipeline import (
-    MIN_ROI_PIXELS,
     FaceROIExtractor,
     get_mean_rgb,
     overlay_roi,
@@ -77,8 +77,8 @@ class RealtimeRPPGPipeline:
         """
         Receives and processes a single frame from the stream.
 
-        Performs face detection, identity verification, and incremental signal 
-        buffering. Triggers rPPG updates at fixed intervals based on the 
+        Performs face detection, identity verification, and incremental signal
+        buffering. Triggers rPPG updates at fixed intervals based on the
         current throughput (effective FPS).
         """
         working_frame = frame_bgr
@@ -97,7 +97,7 @@ class RealtimeRPPGPipeline:
             }
 
         overlay = overlay_roi(working_frame, roi_res.masks)
-        
+
         # We always accept frames if landmarks exist now. Identity lock is disabled.
         r, g, b = get_mean_rgb(working_frame, roi_res.masks["face"])
 
@@ -110,9 +110,11 @@ class RealtimeRPPGPipeline:
         if n % 20 == 0 and n != self._last_fps_log_n:
             self._last_fps_log_n = n
             print(f"[pipeline] {n} samples buffered, effective fps={effective_fps:.1f}")
-        
-        required_pos_frames = max(12, int(round(6.0 * effective_fps))) # 6-sec min window
-        update_stride = 5 # update every 5 frames (~150-200ms)
+
+        required_pos_frames = max(
+            12, int(round(6.0 * effective_fps))
+        )  # 6-sec min window
+        update_stride = 5  # update every 5 frames (~150-200ms)
 
         if n >= required_pos_frames and (self.frame_idx % update_stride == 0):
             self._update_pos_metric(effective_fps)
@@ -134,7 +136,7 @@ class RealtimeRPPGPipeline:
             return {
                 "status": "success",
                 "pulse_signal": [0.0] * 30,
-                "timestamps": [i/fps for i in range(30)],
+                "timestamps": [i / fps for i in range(30)],
                 "peaks_idx": [],
                 "ibi_ms": [],
                 "bpm": None,
@@ -155,18 +157,18 @@ class RealtimeRPPGPipeline:
                     "sdnn_ms": 0.0,
                     "lf_hf_ratio": 0.0,
                     "stress_index": 50,
-                    "stress_level": "Medium"
+                    "stress_level": "Medium",
                 },
                 "method_used": "insufficient_data",
                 "duration_sec": dur,
                 "frames_processed": len(self.rgb_samples),
                 "n_frames": len(self.rgb_samples),
-                "fps": fps
+                "fps": fps,
             }
 
         rgb = np.asarray(self.rgb_samples, dtype=np.float64)
         result = process_rppg(rgb, fps=effective_fps, motion_scores=None)
-        
+
         result["status"] = "success"
         result["frames_processed"] = int(len(self.rgb_samples))
         result["fps"] = float(effective_fps)
@@ -179,7 +181,11 @@ class RealtimeRPPGPipeline:
         confidence = float(result["confidence"])
         reliable = bool(result.get("is_reliable", False))
         bpm = None
-        if reliable and confidence >= MIN_DISPLAY_CONFIDENCE and result["ibi_ms"].size > 0:
+        if (
+            reliable
+            and confidence >= MIN_DISPLAY_CONFIDENCE
+            and result["ibi_ms"].size > 0
+        ):
             bpm = float(60000.0 / np.median(result["ibi_ms"]))
 
         self.current_metric = StreamMetric(
