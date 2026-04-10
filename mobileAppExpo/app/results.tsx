@@ -159,61 +159,6 @@ function IBIChart({
   );
 }
 
-// ── Confidence Arc ──
-function ConfidenceArc({
-  score,
-  colors,
-  accent,
-}: {
-  score: number;
-  colors: any;
-  accent: any;
-}) {
-  const R = 42,
-    cx = 50,
-    cy = 50;
-  const angle = score * 270;
-  const start = -225 * (Math.PI / 180);
-  const end = start + (angle * Math.PI) / 180;
-  const x1 = cx + R * Math.cos(start),
-    y1 = cy + R * Math.sin(start);
-  const x2 = cx + R * Math.cos(end),
-    y2 = cy + R * Math.sin(end);
-  const largeArc = angle > 180 ? 1 : 0;
-  const tEnd =
-    cx + R * Math.cos((-225 * Math.PI) / 180 + (270 * Math.PI) / 180);
-  const tEndY =
-    cy + R * Math.sin((-225 * Math.PI) / 180 + (270 * Math.PI) / 180);
-  return (
-    <View style={styles.arcContainer}>
-      <Svg width={100} height={100}>
-        <Path
-          d={`M ${x1.toFixed(1)} ${y1.toFixed(1)} A ${R} ${R} 0 1 1 ${tEnd.toFixed(1)} ${tEndY.toFixed(1)}`}
-          stroke={colors.border}
-          strokeWidth={5}
-          fill="none"
-          strokeLinecap="round"
-        />
-        {score > 0.01 && (
-          <Path
-            d={`M ${x1.toFixed(1)} ${y1.toFixed(1)} A ${R} ${R} 0 ${largeArc} 1 ${x2.toFixed(1)} ${y2.toFixed(1)}`}
-            stroke={accent.primary}
-            strokeWidth={5}
-            fill="none"
-            strokeLinecap="round"
-          />
-        )}
-      </Svg>
-      <View style={styles.arcInner}>
-        <Text style={[styles.arcScore, { color: colors.textPrimary }]}>
-          {Math.round(score * 100)}
-        </Text>
-        <Text style={[styles.arcLabel, { color: colors.textTertiary }]}>%</Text>
-      </View>
-    </View>
-  );
-}
-
 // ── Vital Metric Card ──
 function VitalCard({
   label,
@@ -444,7 +389,6 @@ export default function ResultsScreen() {
           60000 / (ibi.reduce((a: number, b: number) => a + b, 0) / ibi.length),
         )
       : null);
-  const conf = result.confidence ?? 0;
   const isFailed = result.status === "failed";
   const failReason = (result as any).reason as string | undefined;
   const failReasonText =
@@ -769,27 +713,32 @@ export default function ResultsScreen() {
             </View>
           </View>
 
-          {/* Confidence + Stress Index */}
-          <View style={styles.stressConfRow}>
+          {/* Stress Index */}
+          <View
+            style={[
+              styles.section,
+              {
+                backgroundColor: colors.card,
+                borderColor: colors.cardBorder,
+              },
+            ]}
+          >
+            <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>
+              Stress Score
+            </Text>
             <View
-              style={[
-                styles.stressConfCard,
-                {
-                  backgroundColor: colors.card,
-                  borderColor: colors.cardBorder,
-                  flex: 1.4,
-                },
-              ]}
+              style={{
+                flexDirection: "row",
+                alignItems: "baseline",
+                marginTop: 12,
+                marginBottom: 8,
+              }}
             >
-              <Text
-                style={[styles.sectionTitle, { color: colors.textTertiary }]}
-              >
-                Stress Score
-              </Text>
               <Text
                 style={[
                   styles.stressValue,
                   {
+                    fontSize: 48,
                     color:
                       stress === "High"
                         ? "#EF4444"
@@ -801,94 +750,33 @@ export default function ResultsScreen() {
               >
                 {stressScore !== null ? stressScore : "--"}
               </Text>
-              <Text style={[styles.stressSub, { color: colors.textTertiary }]}>
-                Level: {stress}
-              </Text>
-              <View
-                style={[styles.stressBar, { backgroundColor: colors.border }]}
+              <Text
+                style={[
+                  styles.metricBoxUnit,
+                  { color: colors.textTertiary, marginLeft: 6 },
+                ]}
               >
-                <View
-                  style={[
-                    styles.stressFill,
-                    {
-                      width: `${hrv.stress_index ?? 0}%`,
-                      backgroundColor: accent.primary,
-                    },
-                  ]}
-                />
-              </View>
+                /100
+              </Text>
             </View>
+            <Text style={[styles.stressSub, { color: colors.textTertiary }]}>
+              Level: {stress}
+            </Text>
             <View
               style={[
-                styles.stressConfCard,
-                {
-                  backgroundColor: colors.card,
-                  borderColor: colors.cardBorder,
-                  flex: 1,
-                  alignItems: "center",
-                },
+                styles.stressBar,
+                { backgroundColor: colors.border, marginTop: 16 },
               ]}
             >
-              <Text
-                style={[styles.sectionTitle, { color: colors.textTertiary }]}
-              >
-                Confidence
-              </Text>
-              <ConfidenceArc score={conf} colors={colors} accent={accent} />
-              <Text style={[styles.confLabel, { color: colors.textTertiary }]}>
-                {conf >= 0.7 ? "High" : conf >= 0.45 ? "Medium" : "Low"}
-              </Text>
-            </View>
-          </View>
-
-          {/* Quality Breakdown */}
-          <View
-            style={[
-              styles.section,
-              { backgroundColor: colors.card, borderColor: colors.cardBorder },
-            ]}
-          >
-            <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>
-              Quality Breakdown
-            </Text>
-            <View style={styles.qualGrid}>
-              {[
-                ["IBI Regularity", result.confidence_details?.ibi_regularity],
-                ["Spectral SNR", result.confidence_details?.snr],
-                ["Peak Density", result.confidence_details?.density],
-                ["Data Completeness", result.confidence_details?.duration],
-              ].map(([label, val]) => (
-                <View key={label as string} style={styles.qualRow}>
-                  <Text
-                    style={[styles.qualLabel, { color: colors.textTertiary }]}
-                  >
-                    {label as string}
-                  </Text>
-                  <View
-                    style={[
-                      styles.qualTrack,
-                      { backgroundColor: colors.border },
-                    ]}
-                  >
-                    <View
-                      style={[
-                        styles.qualFill,
-                        {
-                          width: `${((val as number) ?? 0) * 100}%`,
-                          backgroundColor: accent.primary,
-                        },
-                      ]}
-                    />
-                  </View>
-                  <Text
-                    style={[styles.qualVal, { color: colors.textSecondary }]}
-                  >
-                    {val !== undefined && val !== null
-                      ? Math.round((val as number) * 100) + "%"
-                      : "--"}
-                  </Text>
-                </View>
-              ))}
+              <View
+                style={[
+                  styles.stressFill,
+                  {
+                    width: `${hrv.stress_index ?? 0}%`,
+                    backgroundColor: accent.primary,
+                  },
+                ]}
+              />
             </View>
           </View>
 

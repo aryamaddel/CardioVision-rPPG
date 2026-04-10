@@ -191,7 +191,6 @@ export default function RecordScreen() {
   const [countdownN, setCountdownN] = useState(3);
   const [timeLeft, setTimeLeft] = useState(RECORD_DURATION);
   const [progress, setProgress] = useState(0);
-  const [quality, setQuality] = useState(0);
   const [liveBpm, setLiveBpm] = useState<number | null>(null);
   const [liveMethod, setLiveMethod] = useState("pending");
   const [isTimerPaused, setIsTimerPaused] = useState(false);
@@ -208,19 +207,10 @@ export default function RecordScreen() {
   } | null> | null>(null);
   const usingLiveStreamRef = useRef(false);
   const pausedRef = useRef(false);
-  const qualityAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     if (!permission?.granted) requestPermission();
   }, [permission?.granted, requestPermission]);
-
-  useEffect(() => {
-    Animated.timing(qualityAnim, {
-      toValue: quality,
-      duration: 300,
-      useNativeDriver: false,
-    }).start();
-  }, [quality, qualityAnim]);
 
   useEffect(() => {
     return () => {
@@ -258,7 +248,6 @@ export default function RecordScreen() {
         overlayMaxSide: 0,
         overlayStride: 999,
         onFrame: (frame: any) => {
-          setQuality(frame.metric?.confidence ?? frame.confidence ?? 0);
           setLiveBpm(frame.metric?.bpm ?? frame.bpm ?? null);
           setLiveMethod(frame.metric?.method ?? frame.method ?? "pending");
 
@@ -300,7 +289,6 @@ export default function RecordScreen() {
 
     setIsRecording(true);
     setTimeLeft(RECORD_DURATION);
-    setQuality(0);
     setLiveBpm(null);
     setLiveMethod("pending");
     setIsTimerPaused(false);
@@ -422,7 +410,6 @@ export default function RecordScreen() {
     setCountdown3(false);
     setTimeLeft(RECORD_DURATION);
     setProgress(0);
-    setQuality(0);
     setLiveBpm(null);
     setLiveMethod("pending");
     setIsTimerPaused(false);
@@ -543,26 +530,6 @@ export default function RecordScreen() {
         )}
 
         <View style={{ flex: 1 }} />
-
-        {/* Signal quality bar (during recording) */}
-        {isRecording && (
-          <View style={styles.metricsArea}>
-            <View style={styles.qualityBar}>
-              <Text style={styles.qualityLabel}>Signal Quality</Text>
-              <View style={styles.qualityTrack}>
-                <Animated.View
-                  style={[
-                    styles.qualityFill,
-                    { width: qualityW, backgroundColor: accent.primary },
-                  ]}
-                />
-              </View>
-              <Text style={styles.qualityPct}>
-                {Math.round(quality * 100)}%
-              </Text>
-            </View>
-          </View>
-        )}
 
         {/* Tips — positioned BELOW the oval, not overlapping */}
         {!isRecording && !countdown3 && (

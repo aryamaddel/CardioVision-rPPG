@@ -41,7 +41,6 @@ async def _handle_client(websocket, pipeline: RealtimeRPPGPipeline, config: Dict
             await websocket.send(json.dumps({
                 "type": "frame_result",
                 "bpm": res["metric"].bpm,
-                "confidence": res["metric"].confidence,
                 "has_face": res["has_face"],
                 "overlay": _encode_jpeg(res["overlay"], quality=50, max_side=320) if frame_count % 3 == 0 else None
             }))

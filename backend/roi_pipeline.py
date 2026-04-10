@@ -67,7 +67,6 @@ class ROIResult:
     crops: Dict[str, np.ndarray]
     face_mask: Optional[np.ndarray] = None
     landmarks: Optional[np.ndarray] = None
-    quality_score: float = 1.0
 
 
 class VideoSource:
@@ -206,9 +205,6 @@ class FaceROIExtractor:
             int(lm[:, 1].max() - lm[:, 1].min()),
         )
 
-        # Simplified: all detected faces are quality=1.0. Reliability is handled downstream.
-        quality_score = 1.0
-
         crops = {} # Removed per request: not used in rPPG
 
         return ROIResult(
@@ -219,7 +215,6 @@ class FaceROIExtractor:
             crops,
             face_mask,
             lm,
-            quality_score,
         )
 
     def close(self):
@@ -275,24 +270,6 @@ def get_mean_rgb(frame: np.ndarray, mask: np.ndarray):
     if len(px) == 0:
         return np.nan, np.nan, np.nan
     return float(np.mean(px[:, 2])), float(np.mean(px[:, 1])), float(np.mean(px[:, 0]))
-
-
-def compute_mad_confidence(roi_g_values: Dict[str, float]) -> float:
-    """
-    Estimates signal quality based on the Median Absolute Deviation (MAD).
-
-    Args:
-        roi_g_values (dict): Mapping of ROI names to their mean green channel values.
-
-    Returns:
-        float: A normalized confidence score (0-1).
-    """
-    vals = [v for v in roi_g_values.values() if not np.isnan(v)]
-    if len(vals) < 2:
-        return 0.0
-    med = float(np.median(vals))
-    mad = float(np.mean(np.abs(np.array(vals) - med)))
-    return float(np.clip(1.0 - mad / 20.0, 0.0, 1.0))
 
 
 def overlay_roi(frame: np.ndarray, roi_masks: Dict[str, np.ndarray]) -> np.ndarray:

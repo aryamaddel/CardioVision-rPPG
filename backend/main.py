@@ -84,8 +84,7 @@ def run_local_preview(model_path: str):
             # Overlay some data
             m = res["metric"]
             bpm_text = f"BPM: {m.bpm:.1f}" if m.bpm else "BPM: --"
-            conf_text = f"Conf: {m.confidence:.1f}"
-            cv2.putText(vis, f"{bpm_text} | {conf_text}", (20, 40), 
+            cv2.putText(vis, f"{bpm_text}", (20, 40), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
             cv2.putText(vis, f"Method: {m.method}", (20, 70), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1)
