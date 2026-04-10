@@ -76,7 +76,7 @@ const DarkColors: ThemeColorSet = {
   glassBorder:  'rgba(255,255,255,0.08)',
 };
 
-export type ThemeColors = ThemeColorSet;
+type ThemeColors = ThemeColorSet;
 
 // ── Theme Context ──
 interface ThemeContextType {
@@ -86,7 +86,7 @@ interface ThemeContextType {
   toggle: () => void;
 }
 
-export const ThemeContext = createContext<ThemeContextType>({
+const ThemeContext = createContext<ThemeContextType>({
   colors: LightColors,
   accent: Accent,
   isDark: false,

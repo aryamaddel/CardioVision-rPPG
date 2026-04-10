@@ -1,14 +1,10 @@
 """
-triage_agent.py — TWIST 1: Triage Decision Agent
+The decision-making heart of the CardioVision clinical dashboard.
 
-When rPPG confidence drops below threshold, automatically switches to
-Visual Assessment Mode: analyzes facial appearance for physical distress signs
-(pallor, flushing, asymmetry) and outputs a Visual Stress Score.
-
-Dashboard displays:
-  - Current mode: "BIOMETRIC" or "VISUAL ASSESSMENT"
-  - Reason for mode switch
-  - Active signal confidence
+The Triage Agent monitors biometric signal quality (confidence, motion) and 
+automatically switches the system between 'Biometric Mode' (HR/HRV) and 
+'Visual Assessment Mode'. In visual mode, it performs colorimetric analysis 
+of the face to detect signs of physical distress like pallor or flushing.
 """
 
 import numpy as np
@@ -35,8 +31,11 @@ class TriageDecision:
 
 class TriageAgent:
     """
-    Monitors rPPG confidence and decides which mode to display.
-    Uses hysteresis to avoid rapid mode toggling.
+    Intelligent mode controller for the rPPG dashboard.
+
+    Uses a hysteresis-based state machine to manage transitions between 
+    biometric and visual modes, preventing rapid 'jitter' when signal 
+    quality is borderline.
     """
 
     def __init__(self):
@@ -48,14 +47,16 @@ class TriageAgent:
         face_frames: np.ndarray = None,
     ) -> TriageDecision:
         """
-        Main entry point. Called each processing cycle.
+        Evaluates current signals and determines the active operating mode based on 
+        rPPG confidence, motion levels, and reliability flags.
 
         Args:
-            rppg_result:  output dict from process_rppg() or process_rppg_with_deep()
-            face_frames:  recent face crop frames for visual assessment (N, H, W, 3)
+            rppg_result (dict): Output from the core rPPG processing pipeline.
+            face_frames (np.ndarray, optional): Recent face crops for visual analysis.
 
         Returns:
-            TriageDecision with current mode and all outputs
+            TriageDecision: Structural result containing the mode, reason, and 
+                associated clinical metrics.
         """
         confidence     = rppg_result.get("confidence", 0.0)
         is_reliable    = rppg_result.get("is_reliable", False)
@@ -127,16 +128,18 @@ class TriageAgent:
 
 def compute_visual_stress_score(face_frames: np.ndarray) -> float:
     """
-    Lightweight visual distress analysis from face crop frames.
-    No neural network required — uses physiologically-motivated color analysis.
+    Analyzes facial appearance for physiological signs of distress.
 
-    Signals analyzed:
-    1. Pallor index — pale skin indicates stress/shock (low red saturation)
-    2. Flushing index — flushed skin (high red) indicates elevated stress response
-    3. Color variability — erratic skin color changes suggest distress
-    4. Brightness variance — irregular lighting may indicate movement/instability
+    Calculates a composite score (0-100) based on:
+    1. Pallor Index: detecting significant drops in skin saturation.
+    2. Flushing Index: measuring elevated 'redness' in the LAB color space.
+    3. Color Variability: assessing temporal stability of skin tone.
 
-    Returns: stress score 0-100
+    Args:
+        face_frames (np.ndarray): sequence of face crop images.
+
+    Returns:
+        float: Normalized stress score where higher indicates greater distress.
     """
     if face_frames is None or len(face_frames) == 0:
         return 0.0
@@ -219,8 +222,15 @@ def _score_to_label(score: float) -> str:
 
 def format_dashboard(decision: TriageDecision) -> dict:
     """
-    Format TriageDecision into a clean dict for the UI (Member 5).
-    Keys match what the UI expects to display.
+    Prepares triage results for presentation in the UI dashboard by mapping 
+    internal status to human-readable labels and UI theme colors.
+
+    Args:
+        decision (TriageDecision): The raw decision object.
+
+    Returns:
+        dict: A flattened dictionary with keys like 'mode_badge', 'bpm', 
+            and 'stress_level' for the frontend.
     """
     mode_color = "#00FF88" if decision.mode == "BIOMETRIC" else "#FF6600"
     badge = "🫀 BIOMETRIC MODE" if decision.mode == "BIOMETRIC" else "👁️ VISUAL ASSESSMENT MODE"

@@ -7,9 +7,9 @@ import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import Svg, { Circle, Ellipse, Rect, Text as SvgText } from 'react-native-svg';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme, Typography, Spacing, Radius } from '../src/theme';
-import { LiveRPPGClient, getMockResult, type RPPGResult } from '../src/api/rppgService';
-import { clearScanSession, setPendingScanResult, setScanSession } from '../src/state/scanSession';
+import { useTheme, Typography, Spacing, Radius } from './theme';
+import { LiveRPPGClient, getMockResult, type RPPGResult } from './api/rppgService';
+import { clearScanSession, setPendingScanResult, setScanSession } from './state/scanSession';
 
 const { width, height: screenH } = Dimensions.get('window');
 const RECORD_DURATION = 30;

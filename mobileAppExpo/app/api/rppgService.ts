@@ -65,13 +65,13 @@ export interface RPPGResult {
   status: string;
 }
 
-export interface LiveMetric {
+interface LiveMetric {
   bpm: number | null;
   confidence: number;
   method: string;
 }
 
-export interface LiveFrameResult {
+interface LiveFrameResult {
   type: 'frame_result';
   metric: LiveMetric;
   has_face: boolean;
@@ -254,7 +254,7 @@ export async function processVideo(
   return response.data;
 }
 
-export async function checkHealth(): Promise<boolean> {
+async function checkHealth(): Promise<boolean> {
   try { await api.get('/health', { timeout: 3000 }); return true; } catch { return false; }
 }
 

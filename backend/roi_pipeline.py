@@ -1,3 +1,11 @@
+"""
+The computer vision front-end for the CardioVision-rPPG system.
+
+Handles face detection, landmarking, and region-of-interest (ROI) extraction 
+using MediaPipe. Includes robust human-face guardrails (skin color checks, 
+geometry verification, and texture analysis) to prevent spoofs and ensure 
+high-quality signal extraction.
+"""
 import time
 import urllib.request
 from dataclasses import dataclass
@@ -68,6 +76,13 @@ class ROIResult:
 
 
 class VideoSource:
+    """
+    Unified wrapper for video files and webcam streams.
+
+    Normalizes frame rates and provides a generator interface for processing 
+    video content frame-by-frame. Supports real-time webcam capture with 
+    drift correction.
+    """
     def __init__(self, source: Union[int, str] = 0, target_fps: float = 30.0):
         self.source = source
         self.target_fps = target_fps
@@ -126,6 +141,13 @@ class VideoSource:
 
 
 class FaceROIExtractor:
+    """
+    Orchestrates face detection and mask generation for rPPG.
+
+    Uses MediaPipe Face Landmarker to identify facial features, isolates 
+    stable skin regions (forehead/cheeks), and applies multi-stage guardrails 
+    to filter out non-human or poor-quality frames.
+    """
     def __init__(self, model_path: str):
         p = Path(model_path)
         if not p.exists():
@@ -155,6 +177,17 @@ class FaceROIExtractor:
         }
 
     def process(self, frame_bgr: np.ndarray, ts_ms: int) -> Optional[ROIResult]:
+        """
+        Processes a single frame to extract facial ROIs and masks.
+
+        Args:
+            frame_bgr (np.ndarray): The input image in BGR format.
+            ts_ms (int): Timestamp of the frame in milliseconds.
+
+        Returns:
+            Optional[ROIResult]: Container with masks, crops, and landmarks if a 
+                valid face is detected and passes guardrails; else None.
+        """
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
         res = self.detector.detect_for_video(mp_img, ts_ms)
@@ -362,6 +395,16 @@ def _estimate_skin_consistency(frame_bgr: np.ndarray, face_mask: np.ndarray) -> 
 
 
 def get_mean_rgb(frame: np.ndarray, mask: np.ndarray):
+    """
+    Computes the average R, G, B values from the pixels specified by a mask.
+
+    Args:
+        frame (np.ndarray): The BGR image data.
+        mask (np.ndarray): Binary mask identifying the ROI.
+
+    Returns:
+        Tuple[float, float, float]: The mean Red, Green, and Blue values.
+    """
     px = frame[mask > 0]
     if len(px) == 0:
         return np.nan, np.nan, np.nan
@@ -369,6 +412,15 @@ def get_mean_rgb(frame: np.ndarray, mask: np.ndarray):
 
 
 def compute_mad_confidence(roi_g_values: Dict[str, float]) -> float:
+    """
+    Estimates signal quality based on the Median Absolute Deviation (MAD).
+
+    Args:
+        roi_g_values (dict): Mapping of ROI names to their mean green channel values.
+
+    Returns:
+        float: A normalized confidence score (0-1).
+    """
     vals = [v for v in roi_g_values.values() if not np.isnan(v)]
     if len(vals) < 2:
         return 0.0
@@ -378,6 +430,16 @@ def compute_mad_confidence(roi_g_values: Dict[str, float]) -> float:
 
 
 def overlay_roi(frame: np.ndarray, roi_masks: Dict[str, np.ndarray]) -> np.ndarray:
+    """
+    Visualizes the extracted ROIs by overlaying them on the original frame.
+
+    Args:
+        frame (np.ndarray): The original BGR frame.
+        roi_masks (dict): Dictionary of masks to overlay.
+
+    Returns:
+        np.ndarray: The frame with the ROI visualization applied.
+    """
     vis = frame.copy()
     face_mask = roi_masks.get("face")
     if face_mask is None:

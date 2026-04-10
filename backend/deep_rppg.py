@@ -1,11 +1,10 @@
 """
-deep_rppg.py
-Deep neural rPPG extraction using a single pretrained open-rppg model.
-Uses PhysFormer (highest accuracy option in this project setup).
+Deep learning backend for neural rPPG extraction.
 
-Input:  face_frames — list/array of BGR face crop frames, shape (N, H, W, 3)
-        fps — frames per second
-Output: 1D BVP/pulse signal array of length N
+This module integrates the pretrained PhysFormer model (from the open-rppg 
+library) to extract blood volume pulse signals directly from face video 
+crops. It provides model caching, temporary video generation, and 
+cross-sampling to match pipeline frame rates.
 """
 
 import numpy as np
@@ -84,7 +83,19 @@ def _extract_bvp_from_result(result, model):
 
 
 def frames_to_temp_video(frames_bgr: np.ndarray, fps: float) -> str:
-    """Write face crop frames to a temporary video for open-rppg."""
+    """
+    Encodes an array of raw frames into a temporary AVI video file.
+
+    Required because many deep rPPG models (like PhysFormer) expect video 
+    files as input rather than raw tensors.
+
+    Args:
+        frames_bgr (np.ndarray): The face crop sequence.
+        fps (float): The target frame rate for the video.
+
+    Returns:
+        str: Absolute path to the generated temporary video file.
+    """
     global _video_fourcc
     fd, tmp_path = tempfile.mkstemp(suffix=".avi")
     os.close(fd)
@@ -123,7 +134,21 @@ def extract_bvp_deep(
     model_name: str = "auto",
     max_frames: int | None = 300,
 ) -> tuple[np.ndarray, str]:
-    """Extract BVP from face frames using PhysFormer only."""
+    """
+    Extracts the BVP signal from face frames using a neural network.
+
+    Manages model loading, data preprocessing, external model execution, 
+    and output resampling.
+
+    Args:
+        face_frames (np.ndarray): (N, H, W, 3) BGR image array.
+        fps (float): Frame rate.
+        model_name (str): Model architecture name (defaults to PhysFormer).
+        max_frames (int, optional): Limits memory usage by downsampling long clips.
+
+    Returns:
+        Tuple[np.ndarray, str]: (The 1D pulse waveform, the name of the model used).
+    """
     if face_frames is None or len(face_frames) == 0:
         return np.array([], dtype=np.float64), "none"
 

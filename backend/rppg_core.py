@@ -1,3 +1,11 @@
+"""
+The algorithmic engine of the CardioVision-rPPG system.
+
+Provides specialized signal processing functions for extracting blood volume 
+pulse (BVP) from RGB signals. Includes implementations of the POS algorithm, 
+spectral analysis, Butterworth filters, and Heart Rate Variability (HRV) 
+metrics for stress estimation.
+"""
 import numpy as np
 from scipy.signal import (
     butter,
@@ -22,7 +30,23 @@ HIGH_HZ = 4.0  # 240 BPM
 
 
 def bandpass_filter(signal_1d, fps, low_hz=LOW_HZ, high_hz=HIGH_HZ, order=4):
-    """Apply Butterworth bandpass filter to a 1D signal."""
+    """
+    Applies a zero-phase Butterworth bandpass filter to a 1D signal.
+
+    Designed to isolate the human heart rate frequency band. Uses filtfilt 
+    for larger signals to avoid phase shift, and lfilter as a fallback 
+    for very short buffers.
+
+    Args:
+        signal_1d (np.ndarray): The input signal to filter.
+        fps (float): Sampling rate (frames per second).
+        low_hz (float, optional): Lower cutoff frequency. Defaults to 0.7 (42 BPM).
+        high_hz (float, optional): Upper cutoff frequency. Defaults to 4.0 (240 BPM).
+        order (int, optional): The order of the filter. Defaults to 4.
+
+    Returns:
+        np.ndarray: The bandpass-filtered signal.
+    """
     signal_1d = np.asarray(signal_1d, dtype=np.float64)
     if signal_1d.size < 3:
         return signal_1d.copy()
@@ -43,8 +67,19 @@ def bandpass_filter(signal_1d, fps, low_hz=LOW_HZ, high_hz=HIGH_HZ, order=4):
 
 
 def spectral_peak_snr(sig, fps):
-    """Ratio of peak FFT magnitude² to mean magnitude² in the HR band.
-    Higher value = cleaner, sharper pulse peak."""
+    """
+    Calculates the Signal-to-Noise Ratio (SNR) in the heart rate frequency band.
+
+    Uses FFT to find the power of the dominant peak within the physiological 
+    heart rate range relative to the average power of the full band.
+
+    Args:
+        sig (np.ndarray): The pulse signal array.
+        fps (float): Sampling rate (frames per second).
+
+    Returns:
+        float: The peak FFT power ratio. Higher values indicate a cleaner signal.
+    """
     fft = np.abs(np.fft.rfft(sig))
     freqs = np.fft.rfftfreq(len(sig), d=1.0 / fps)
     mask = (freqs >= LOW_HZ) & (freqs <= HIGH_HZ)
@@ -64,8 +99,19 @@ def spectral_peak_snr(sig, fps):
 
 
 def detrend_rgb(rgb):
-    """Light detrend for POS: removes linear drift but preserves channel means
-    so that POS's internal per-window normalization (segment / mean_c) works correctly."""
+    """
+    Removes linear trends from multi-channel RGB data.
+
+    Preserves the global channel means while removing slow drifts. This is 
+    crucial for the POS algorithm to function correctly during per-window 
+    normalization.
+
+    Args:
+        rgb (np.ndarray): Input RGB matrix of shape (N, 3).
+
+    Returns:
+        np.ndarray: The detrended RGB signal.
+    """
     result = np.zeros_like(rgb, dtype=np.float64)
     for i in range(3):
         channel = rgb[:, i].astype(np.float64)
@@ -75,7 +121,19 @@ def detrend_rgb(rgb):
 
 
 def detect_motion_frames(rgb_raw, threshold=2.5):
-    """Flags frames with excessive inter-frame RGB jumps."""
+    """
+    Identifies frames with excessive pixel intensity jumps.
+
+    Computes the mean absolute difference between consecutive frames and flags 
+    those that deviate significantly from the baseline.
+
+    Args:
+        rgb_raw (np.ndarray): raw RGB data.
+        threshold (float, optional): standard deviation factor for rejection.
+
+    Returns:
+        np.ndarray: A boolean mask where True indicates a high-motion frame.
+    """
     diff = np.abs(np.diff(rgb_raw, axis=0))
     frame_motion = diff.mean(axis=1)
     motion_threshold = np.mean(frame_motion) + threshold * np.std(frame_motion)
@@ -84,7 +142,20 @@ def detect_motion_frames(rgb_raw, threshold=2.5):
 
 
 def remove_motion_artifacts(pulse, fps, method="savgol"):
-    """Gentle smoothing to reduce sharp motion spikes while preserving peak shape."""
+    """
+    Smoothes the pulse signal to mitigate sharp motion-induced spikes.
+
+    Supports Median filtering, Savitzky-Golay filtering, or a combination of 
+    both to preserve peak shapes while removing high-frequency noise.
+
+    Args:
+        pulse (np.ndarray): The 1D BVP signal.
+        fps (float): Sampling rate.
+        method (str, optional): 'median', 'savgol', or 'both'. Defaults to 'savgol'.
+
+    Returns:
+        np.ndarray: The cleaned pulse signal.
+    """
     cleaned = pulse.copy()
     if method in ("median", "both"):
         kernel = max(3, int(fps * 0.067) | 1)
@@ -147,6 +218,21 @@ def pos_algorithm(rgb, fps, window_sec=4.0):
 
 
 def extract_pulse_waveform(pulse, fps):
+    """
+    Extracts peak indices and Inter-Beat Intervals (IBI) from raw pulse data.
+
+    Normalizes the signal and uses adaptive peak detection with multiple 
+    threshold levels to find consistent beats. Filters IBI to valid 
+    physiological ranges (300ms to 1500ms).
+
+    Args:
+        pulse (np.ndarray): The 1D input pulse signal.
+        fps (float): Sampling rate.
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray, np.ndarray]: (Peak indices, IBI values in ms, 
+            normalized pulse waveform).
+    """
     """Extract clinical-grade features: peaks, IBI, and normalized waveform."""
     p_min, p_max = pulse.min(), pulse.max()
     if p_max - p_min < 1e-8:
@@ -176,6 +262,23 @@ def extract_pulse_waveform(pulse, fps):
 
 
 def compute_confidence_score(pulse, fps, ibi_ms):
+    """
+    Calculates a multi-factor confidence score for a pulse segment.
+
+    Evaluates:
+    1. IBI Regularity (Coefficient of Variation)
+    2. Spectral SNR (Sharpness of frequency peak)
+    3. Peak Density (Valid BPM range check)
+    4. Duration (Data quantity)
+
+    Args:
+        pulse (np.ndarray): The BVP signal.
+        fps (float): Sampling rate.
+        ibi_ms (np.ndarray): Array of Inter-Beat Intervals.
+
+    Returns:
+        Tuple[float, dict, bool]: (Final 0-1 score, detail metrics, reliability flag).
+    """
     """
     Computes a 0–1 confidence score based on IBI regularity, SNR,
     peak density, and data duration. Returns (score, details, is_reliable).
@@ -343,8 +446,18 @@ def process_rppg(
     motion_scores: np.ndarray | None = None,
 ):
     """
-    Orchestrates the entire signal processing pipeline from raw RGB to pulse results.
-    Uses the POS algorithm (Wang et al., 2017).
+    The standard rPPG processing pipeline using the POS algorithm.
+
+    Performs motion detection, RGB detrending, POS extraction, and pulse 
+    summarization including HRV calculation and confidence scoring.
+
+    Args:
+        rgb_raw (np.ndarray): Shape (N, 3) representing mean R, G, B per frame.
+        fps (float, optional): Target frame rate. Defaults to 30.0.
+        motion_scores (np.ndarray, optional): Precomputed motion metrics.
+
+    Returns:
+        dict: comprehensive results containing 'pulse_signal', 'ibi_ms', 'confidence', etc.
     """
     # 1. Motion
     if motion_scores is not None:
@@ -471,17 +584,22 @@ def process_rppg_with_deep(
     deep_max_frames: int | None = None,
 ) -> dict:
     """
-    Full pipeline: POS + optional deep model fusion.
+    Advanced rPPG pipeline fusing statistical POS and deep learning models.
+
+    Runs both POS and the deep neural model (if face frames are available and 
+    capable), then selects or fuses the signals based on frequency-domain SNR 
+    and guardrail consistency checks.
 
     Args:
-        rgb_raw:      (N, 3) mean RGB per frame from ROI
-        fps:          frames per second
-        face_frames:  (N, H, W, 3) BGR face crops — required for deep model
-                      If None, deep model is skipped
-        motion_scores: optional motion quality array from Member 1
+        rgb_raw: (N, 3) matrix of mean RGB per frame.
+        fps: The sampling rate.
+        face_frames: (N, H, W, 3) BGR face crops for the deep model.
+        motion_scores: Optional pre-calculated motion data.
+        selection_mode: 'best_confidence' to pick best sig, or 'fuse' for ensemble.
+        deep_max_frames: Max frames to send to the deep model to prevent memory issues.
 
     Returns:
-        Same dict as process_rppg() but with extra 'deep_model_used' key
+        dict: Full result set including the 'selected_source' and 'is_reliable' status.
     """
     from deep_rppg import extract_bvp_deep, is_deep_model_available
 

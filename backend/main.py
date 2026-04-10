@@ -1,3 +1,10 @@
+"""
+The entry point for the CardioVision-rPPG batch processing pipeline.
+
+This module provides the command-line interface and orchestration for extracting 
+physiological signals from video sources (files or webcams). It integrates 
+Face ROI extraction, signal processing, and result persistence to disk.
+"""
 import argparse
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +29,18 @@ DEFAULT_MODEL_PATH = str(Path(__file__).with_name("face_landmarker.task"))
 
 
 def run_extraction(args):
+    """
+    Executes the batch rPPG extraction workflow for a given video source.
+
+    This function initializes the video source and ROI extractor, iterates through 
+    the frames to extract RGB signals from the face, processes the signals using 
+    both statistical (POS) and deep learning methods, and saves the resulting 
+    waveforms, metrics, and metadata to CSV and NPZ files.
+
+    Args:
+        args (argparse.Namespace): Command-line arguments containing 'source', 'fps',
+            'duration', 'output', 'preview', 'save_preview', and 'model_path'.
+    """
     out_dir = Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)
     ts_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -190,6 +209,13 @@ def run_extraction(args):
 
 
 def main():
+    """
+    Main entry point for the tool. Parses CLI arguments and routes execution.
+
+    Handles two primary modes:
+    1. batch: Process a static video file or a webcam stream for a fixed duration.
+    2. stream: Launches a WebSocket server for real-time remote processing.
+    """
     p = argparse.ArgumentParser(
         description="CardioVision rPPG Pipeline v3",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,

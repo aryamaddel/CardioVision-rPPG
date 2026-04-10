@@ -5,7 +5,7 @@ import { View, ActivityIndicator } from 'react-native';
 import { useFonts, SpaceGrotesk_300Light, SpaceGrotesk_400Regular, SpaceGrotesk_500Medium, SpaceGrotesk_600SemiBold, SpaceGrotesk_700Bold } from '@expo-google-fonts/space-grotesk';
 import * as SplashScreen from 'expo-splash-screen';
 import 'react-native-reanimated';
-import { ThemeProvider, useTheme, Accent } from '../src/theme';
+import { ThemeProvider, useTheme, Accent } from './theme';
 
 SplashScreen.preventAutoHideAsync();
 

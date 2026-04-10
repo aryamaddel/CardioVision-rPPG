@@ -1,3 +1,11 @@
+"""
+High-performance streaming pipeline for real-time rPPG analysis.
+
+Designed specifically for low-latency feedback in mobile and web applications. 
+This module handles incremental frame ingestion, asynchronous deep-model 
+execution, biometric identity locking, and automatic mode switching through 
+the Triage Agent.
+"""
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -29,14 +37,14 @@ class StreamMetric:
 
 
 class RealtimeRPPGPipeline:
-    """Incremental rPPG pipeline for webcam/mobile frame streams.
+    """
+    Incremental rPPG processor for high-frequency frame streams.
 
-    Pipeline notes for the upcoming mobile integration:
-    1) React Native Expo app captures frames and sends them to backend.
-    2) Backend receives frame stream over websocket.
-    3) Backend applies ROI overlay (face mask) in near real time.
-    4) Backend returns overlay frames back to mobile for display.
-    5) POS runs first (fast), then deep_rPPG runs async and can replace POS if better.
+    Features:
+    1. Low-latency ROI extraction and green-channel signal tracking.
+    2. Background execution of deep neural models to enhance POS results.
+    3. Biometric 'Identity Lock' to ensure data integrity during sessions.
+    4. Triage orchestration between biometric and visual assessment modes.
     """
 
     def __init__(
@@ -88,12 +96,14 @@ class RealtimeRPPGPipeline:
         self.identity_last_match = True
 
     def close(self):
+        """Releases system resources and shuts down background executors."""
         if self.deep_future and not self.deep_future.done():
             self.deep_future.cancel()
         self.executor.shutdown(wait=False, cancel_futures=True)
         self.roi_extractor.close()
 
     def reset(self):
+        """Clears all session-specific buffers and resets the biometric lock."""
         self.rgb_samples.clear()
         self.face_frames.clear()
         self.sample_ts_ms.clear()
@@ -110,6 +120,21 @@ class RealtimeRPPGPipeline:
         self.deep_future = None
 
     def ingest(self, frame_bgr: np.ndarray, ts_ms: int) -> Dict[str, Any]:
+        """
+        Receives and processes a single frame from the stream.
+
+        Performs face detection, identity verification, and incremental signal 
+        buffering. Triggers rPPG updates at fixed intervals based on the 
+        current throughput (effective FPS).
+
+        Args:
+            frame_bgr (np.ndarray): The raw BGR frame from the client.
+            ts_ms (int): Client-side timestamp in milliseconds.
+
+        Returns:
+            Dict[str, Any]: metadata including 'overlay' image, current 'metric', 
+                and 'identity_match' status.
+        """
         roi_res = self.roi_extractor.process(frame_bgr, ts_ms)
         if roi_res is None:
             self.invalid_streak += 1
@@ -194,6 +219,17 @@ class RealtimeRPPGPipeline:
         }
 
     def finalize(self) -> Dict[str, Any]:
+        """
+        Computes the final biometric results for the entire session.
+
+        Aggregates all buffered frames, runs the highest-accuracy deep models, 
+        performs spectral analysis and HRV extraction, and executes the final 
+        Triage Agent logic to determine the clinical output.
+
+        Returns:
+            Dict[str, Any]: Final report with BPM, HRV, Stress levels, and 
+                reliability metrics.
+        """
         if self.identity_violation_detected:
             return {
                 "status": "failed",

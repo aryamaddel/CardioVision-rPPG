@@ -1,3 +1,11 @@
+"""
+Performance benchmarking suite for the CardioVision-rPPG system.
+
+Automates the evaluation of rPPG accuracy across a batch of test videos by 
+comparing estimated Heart Rate (BPM) against ground truth data. Supports 
+multi-processed execution for high-throughput testing and includes a live 
+preview mode for diagnostic visualization.
+"""
 import json
 import argparse
 import multiprocessing
@@ -12,6 +20,18 @@ from rppg_core import process_rppg_with_deep
 
 
 def load_gt_bpm(gt_path):
+    """
+    Parses Heart Rate ground truth from a specified text file.
+
+    Expects a specific format where the second line contains space-separated 
+    BPM values.
+
+    Args:
+        gt_path (str | Path): Path to the ground truth file.
+
+    Returns:
+        Optional[float]: The mean BPM value, or None if the file is invalid.
+    """
     with open(gt_path, "r") as f:
         lines = [line_str.strip() for line_str in f.readlines() if line_str.strip()]
     return (
@@ -22,6 +42,21 @@ def load_gt_bpm(gt_path):
 
 
 def evaluate(subject_dir, preview=False, verbose=True):
+    """
+    Runs the full rPPG pipeline on a specific test subject's video.
+
+    Calculates the Mean Absolute Error (MAE) relative to the ground truth. 
+    Can optionally display a preview window with real-time ROI overlays.
+
+    Args:
+        subject_dir (Path): Directory containing 'vid.avi' and 'ground_truth.txt'.
+        preview (bool): If True, shows the CV2 visualization window.
+        verbose (bool): If True, displays a progress bar for the subject.
+
+    Returns:
+        Optional[dict]: result dictionary with 'subject', 'gt', 'est', and 'err' 
+            keys, or None if processing fails.
+    """
     video_path, gt_path = subject_dir / "vid.avi", subject_dir / "ground_truth.txt"
     gt_bpm = load_gt_bpm(gt_path)
     if not video_path.exists() or gt_bpm is None:
@@ -128,6 +163,13 @@ def evaluate(subject_dir, preview=False, verbose=True):
 
 
 def main():
+    """
+    Entry point for the benchmark suite.
+
+    Parses CLI arguments, discovers test subjects in the 'test_video' 
+    directory, and orchestrates either sequential or parallel evaluation. 
+    Saves the final report to 'benchmark_results.json'.
+    """
     parser = argparse.ArgumentParser(description="Evaluate CardioVision on Benchmark")
     parser.add_argument("--preview", action="store_true", help="Show live preview (disables multi-processing)")
     parser.add_argument("--jobs", type=int, default=1, help="Number of parallel processes (default: 1)")

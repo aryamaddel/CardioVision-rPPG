@@ -1,6 +1,6 @@
 import type { RPPGResult } from '../api/rppgService';
 
-export interface ScanSession {
+interface ScanSession {
   result: RPPGResult | null;
   videoUri?: string;
 }

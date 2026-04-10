@@ -5,15 +5,15 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import Svg, { Circle } from 'react-native-svg';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme, Typography, Spacing, Radius } from '../src/theme';
-import { processVideo, getMockResult } from '../src/api/rppgService';
+import { useTheme, Typography, Spacing, Radius } from './theme';
+import { processVideo, getMockResult } from './api/rppgService';
 import {
   clearPendingScanResult,
   getPendingScanResult,
   getScanSession,
   setPendingScanResult,
   setScanSession,
-} from '../src/state/scanSession';
+} from './state/scanSession';
 
 const STEPS = [
   { id: 'upload',  label: 'Streaming capture',      sub: 'Live frames sent to backend websocket', detail: 'The mobile app streams JPEG camera frames to the backend over websocket. If websocket is unavailable, the app falls back to HTTP upload mode.' },
