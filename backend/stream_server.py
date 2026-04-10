@@ -84,10 +84,13 @@ def _to_json(obj: Any) -> Any:
 async def run_server(host, port, **kwargs):
     async def handler(ws):
         pipeline = RealtimeRPPGPipeline(
-            model_path=kwargs.get("model_path", DEFAULT_MODEL_PATH),
-            live_deep_enabled=(kwargs.get("live_deep_mode") == "live+final")
+            model_path=kwargs.get("model_path", DEFAULT_MODEL_PATH)
         )
-        config = {"quality": 45, "max_side": 320, "stride": 2}
+        config = {
+            "quality": kwargs.get("jpeg_quality", 45),
+            "max_side": kwargs.get("overlay_max_side", 320),
+            "stride": kwargs.get("overlay_stride", 2)
+        }
         try:
             await _handle_client(ws, pipeline, config)
         finally:
@@ -98,4 +101,4 @@ async def run_server(host, port, **kwargs):
         await asyncio.Future()
 
 if __name__ == "__main__":
-    asyncio.run(run_server("0.0.0.0", 8765, live_deep_mode="final-only"))
+    asyncio.run(run_server("0.0.0.0", 8765))

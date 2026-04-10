@@ -33,12 +33,6 @@ def main():
     p.add_argument("--jpeg-quality", type=int, default=45)
     p.add_argument("--overlay-max-side", type=int, default=320)
     p.add_argument("--overlay-stride", type=int, default=2)
-    p.add_argument(
-        "--live-deep-mode",
-        choices=["off", "final-only", "live+final"],
-        default="final-only",
-        help="off: POS only, final-only: run deep model only at stop, live+final: run deep in live updates and final",
-    )
     # Maintain mode argument for backward compatibility
     p.add_argument(
         "--mode",
@@ -62,7 +56,6 @@ def main():
                 jpeg_quality=args.jpeg_quality,
                 overlay_max_side=args.overlay_max_side,
                 overlay_stride=args.overlay_stride,
-                live_deep_mode=args.live_deep_mode,
             )
         )
 
