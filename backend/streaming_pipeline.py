@@ -96,6 +96,7 @@ class RealtimeRPPGPipeline:
                 "overlay": frame_bgr,
                 "metric": self.current_metric,
                 "has_face": False,
+                "face_mask": None,
             }
 
         overlay = overlay_roi(working_frame, roi_res.masks)
@@ -126,7 +127,9 @@ class RealtimeRPPGPipeline:
             "overlay": overlay,
             "metric": self.current_metric,
             "has_face": True,
+            "face_mask": roi_res.face_mask,
         }
+
 
     def finalize(self) -> Dict[str, Any]:
         """Computes the final biometric results."""
