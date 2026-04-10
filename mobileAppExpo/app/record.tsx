@@ -31,7 +31,6 @@ const { width, height: screenH } = Dimensions.get("window");
 const RECORD_DURATION = 30;
 const CIRC_R = 54;
 const CIRC = 2 * Math.PI * CIRC_R;
-const STREAM_FRAME_INTERVAL_MS = 0; // Use 0 for maximum possible FPS (limited only by device hardware/capture speed)
 const STREAM_CAPTURE_QUALITY = 0.45;
 
 // ── Snackbar ──
@@ -335,20 +334,13 @@ export default function RecordScreen() {
       if (elapsed >= RECORD_DURATION) stopRecording();
     }, 1000);
     if (usingLiveStreamRef.current) {
-      // Use requestAnimationFrame-style adaptive pump instead of fixed interval.
-      // This ensures we never queue frames faster than we can send them.
-      const pumpFrame = () => {
+      const pump = () => {
         if (!liveClientRef.current) return;
         void captureAndStreamFrame().finally(() => {
-          if (liveClientRef.current) {
-            framePumpRef.current = setTimeout(
-              pumpFrame,
-              STREAM_FRAME_INTERVAL_MS,
-            );
-          }
+          if (liveClientRef.current) framePumpRef.current = setTimeout(pump, 0);
         });
       };
-      framePumpRef.current = setTimeout(pumpFrame, 50);
+      pump();
       return;
     }
 
