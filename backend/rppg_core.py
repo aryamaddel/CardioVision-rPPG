@@ -13,8 +13,7 @@ from scipy.signal import (
     filtfilt,
     find_peaks,
     lfilter,
-    medfilt,
-    savgol_filter,
+    welch,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -112,60 +111,14 @@ def detrend_rgb(rgb):
     Returns:
         np.ndarray: The detrended RGB signal.
     """
-    result = np.zeros_like(rgb, dtype=np.float64)
-    for i in range(3):
-        channel = rgb[:, i].astype(np.float64)
-        ch_mean = np.mean(channel)
-        result[:, i] = detrend(channel, type="linear") + ch_mean
-    return result
+    means = rgb.mean(axis=0)
+    return detrend(rgb.astype(np.float64), axis=0, type="linear") + means
 
 
-def detect_motion_frames(rgb_raw, threshold=2.5):
-    """
-    Identifies frames with excessive pixel intensity jumps.
-
-    Computes the mean absolute difference between consecutive frames and flags 
-    those that deviate significantly from the baseline.
-
-    Args:
-        rgb_raw (np.ndarray): raw RGB data.
-        threshold (float, optional): standard deviation factor for rejection.
-
-    Returns:
-        np.ndarray: A boolean mask where True indicates a high-motion frame.
-    """
-    diff = np.abs(np.diff(rgb_raw, axis=0))
-    frame_motion = diff.mean(axis=1)
-    motion_threshold = np.mean(frame_motion) + threshold * np.std(frame_motion)
-    bad_frames = np.concatenate([[False], frame_motion > motion_threshold])
-    return bad_frames
 
 
-def remove_motion_artifacts(pulse, fps, method="savgol"):
-    """
-    Smoothes the pulse signal to mitigate sharp motion-induced spikes.
 
-    Supports Median filtering, Savitzky-Golay filtering, or a combination of 
-    both to preserve peak shapes while removing high-frequency noise.
 
-    Args:
-        pulse (np.ndarray): The 1D BVP signal.
-        fps (float): Sampling rate.
-        method (str, optional): 'median', 'savgol', or 'both'. Defaults to 'savgol'.
-
-    Returns:
-        np.ndarray: The cleaned pulse signal.
-    """
-    cleaned = pulse.copy()
-    if method in ("median", "both"):
-        kernel = max(3, int(fps * 0.067) | 1)
-        cleaned = medfilt(cleaned, kernel_size=kernel)
-    if method in ("savgol", "both"):
-        window = max(5, int(fps * 0.133) | 1)
-        poly = min(3, window - 1)
-        if window > poly:
-            cleaned = savgol_filter(cleaned, window_length=window, polyorder=poly)
-    return cleaned
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -206,6 +159,8 @@ def pos_algorithm(rgb, fps, window_sec=4.0):
         pulse[start:end] += H
         weights[start:end] += 1
 
+    if np.all(weights == 0):
+        return np.zeros(N)
     pulse /= weights + 1e-8
     return bandpass_filter(pulse, fps)
 
@@ -221,42 +176,34 @@ def extract_pulse_waveform(pulse, fps):
     """
     Extracts peak indices and Inter-Beat Intervals (IBI) from raw pulse data.
 
-    Normalizes the signal and uses adaptive peak detection with multiple 
-    threshold levels to find consistent beats. Filters IBI to valid 
-    physiological ranges (300ms to 1500ms).
+    Normalizes the signal and uses adaptive peak detection to find consistent
+    beats. Filters IBI to the valid physiological range matching the 45–220 BPM
+    display confidence window (273–1333 ms).
 
     Args:
         pulse (np.ndarray): The 1D input pulse signal.
         fps (float): Sampling rate.
 
     Returns:
-        Tuple[np.ndarray, np.ndarray, np.ndarray]: (Peak indices, IBI values in ms, 
+        Tuple[np.ndarray, np.ndarray, np.ndarray]: (Peak indices, IBI values in ms,
             normalized pulse waveform).
     """
-    """Extract clinical-grade features: peaks, IBI, and normalized waveform."""
     p_min, p_max = pulse.min(), pulse.max()
     if p_max - p_min < 1e-8:
         return np.array([]), np.array([]), pulse
     clean_pulse = 2 * (pulse - p_min) / (p_max - p_min) - 1
 
     min_distance = max(1, int(fps * 0.4))
-    duration_sec = len(clean_pulse) / fps
-    min_expected_peaks = max(2, int(duration_sec * 0.5))
 
-    threshold_levels = [
-        {"height": 0.20, "prominence": 0.20},
-        {"height": 0.10, "prominence": 0.12},
-        {"height": 0.05, "prominence": 0.06},
-    ]
+    # Single reliable threshold
+    peaks_idx, _ = find_peaks(clean_pulse, distance=min_distance, height=0.15, prominence=0.15)
 
-    peaks_idx, ibi_ms = np.array([]), np.array([])
-    for params in threshold_levels:
-        peaks_idx, _ = find_peaks(clean_pulse, distance=min_distance, **params)
-        if len(peaks_idx) >= 2:
-            ibi_ms = (np.diff(peaks_idx) / fps) * 1000
-            ibi_ms = ibi_ms[(ibi_ms >= 300) & (ibi_ms <= 1500)]
-        if len(peaks_idx) >= min_expected_peaks and len(ibi_ms) >= 2:
-            break
+    if len(peaks_idx) >= 2:
+        ibi_ms = (np.diff(peaks_idx) / fps) * 1000
+        # Match the 45–220 BPM display range: 60000/220 ≈ 273 ms, 60000/45 ≈ 1333 ms
+        ibi_ms = ibi_ms[(ibi_ms >= 273) & (ibi_ms <= 1333)]
+    else:
+        ibi_ms = np.array([])
 
     return peaks_idx, ibi_ms, clean_pulse
 
@@ -280,75 +227,39 @@ def compute_confidence_score(pulse, fps, ibi_ms):
         Tuple[float, dict, bool]: (Final 0-1 score, detail metrics, reliability flag).
     """
     """
-    Computes a 0–1 confidence score based on IBI regularity, SNR,
-    peak density, and data duration. Returns (score, details, is_reliable).
+    Simplified confidence scoring based on SNR and peak consistency.
     """
     details = {}
-    duration = len(pulse) / fps
 
-    # 1. IBI Regularity (0.30)
-    if len(ibi_ms) >= 3:
-        cv = np.std(ibi_ms) / (np.mean(ibi_ms) + 1e-8)
-        reg_score = float(np.clip(1.0 - (cv / 0.40), 0.0, 1.0))
-    elif len(ibi_ms) >= 1:
-        reg_score = (
-            0.4
-            if len(ibi_ms) == 1
-            else float(
-                np.clip(1.0 - (np.std(ibi_ms) / np.mean(ibi_ms) / 0.40), 0.0, 1.0)
-            )
-            * 0.7
-        )
-    else:
-        reg_score = 0.0
+    # 1. SNR Score (0.60) — uses shared spectral_peak_snr
+    raw_snr = spectral_peak_snr(pulse, fps)
+    snr_score = float(np.clip(raw_snr / 10.0, 0.0, 1.0))
 
-    # 2. SNR (0.35)
+    # Annotate dominant BPM from FFT peak
     fft = np.abs(np.fft.rfft(pulse))
     freqs = np.fft.rfftfreq(len(pulse), d=1.0 / fps)
     hr_mask = (freqs >= LOW_HZ) & (freqs <= HIGH_HZ)
-    snr_score = 0.0
-    if hr_mask.any() and fft[hr_mask].sum() > 0:
-        hr_fft, hr_freqs = fft[hr_mask], freqs[hr_mask]
-        p_idx = np.argmax(hr_fft)
-        peak_pwr = hr_fft[p_idx] ** 2
-        peak_f = hr_freqs[p_idx]
-        noise_mask = (np.abs(hr_freqs - peak_f) > 0.15) & (
-            np.abs(hr_freqs - 2 * peak_f) > 0.15
-        )
-        if noise_mask.any():
-            snr_score = float(
-                np.clip(
-                    (peak_pwr / (np.mean(hr_fft[noise_mask] ** 2) + 1e-10)) / 12.0,
-                    0.0,
-                    1.0,
-                )
-            )
+    if hr_mask.any():
+        peak_f = freqs[hr_mask][np.argmax(fft[hr_mask])]
         details["dominant_bpm"] = float(peak_f * 60)
 
-    # 3. Peak Density (0.15)
-    if len(ibi_ms) >= 1:
+    # 2. Peak Density Score (0.40) — matches 45–220 BPM window
+    if len(ibi_ms) >= 2:
         bpm = 60000.0 / np.mean(ibi_ms)
-        density_score = 1.0 if 45 <= bpm <= 160 else (0.6 if 35 <= bpm <= 200 else 0.2)
+        density_score = 1.0 if 45 <= bpm <= 220 else 0.3
     else:
-        density_score = 0.1 if 40 <= details.get("dominant_bpm", 0) <= 180 else 0.0
+        density_score = 0.0
 
-    # 4. Data Duration (0.20)
-    data_score = float(np.clip(duration / 15.0, 0.0, 1.0))
+    final_score = float(0.6 * snr_score + 0.4 * density_score)
+    is_reliable = final_score >= 0.40
 
-    scores = [reg_score, snr_score, density_score, data_score]
-    final_score = float(np.dot(scores, [0.30, 0.35, 0.15, 0.20]))
-    is_reliable = final_score >= 0.45
-
-    details.update(
-        {
-            "final_score": final_score,
-            "is_reliable": is_reliable,
-            "ibi_regularity": reg_score,
-            "snr": snr_score,
-            "density": density_score,
-            "duration": data_score,
-        }
-    )
+    details.update({
+        "final_score": final_score,
+        "is_reliable": is_reliable,
+        "snr": snr_score,
+        "peak_count": len(ibi_ms) + 1 if len(ibi_ms) > 0 else 0,
+        "density": density_score,
+    })
     return final_score, details, is_reliable
 
 
@@ -378,21 +289,22 @@ def compute_hrv_features(ibi_ms):
     rmssd = np.sqrt(np.mean(diff**2)) if len(diff) > 0 else 0.0
     sdnn = np.std(ibi_sec)
 
-    # Frequency-Domain
+    # Frequency-Domain — resample IBI to a uniform 4 Hz grid before Welch
     try:
-        from scipy.signal import welch
-
-        fs_interp = 1.0 / np.mean(ibi_sec)
-        nperseg = min(len(ibi_sec), 256)
-        if nperseg > 0:
-            freqs, psd = welch(ibi_sec, fs=fs_interp, nperseg=nperseg)
+        # Cumulative time stamps from IBI series (in seconds)
+        ibi_cumtime = np.cumsum(ibi_sec)
+        t_start, t_end = ibi_cumtime[0], ibi_cumtime[-1]
+        fs_interp = 4.0  # 4 Hz uniform grid is standard for HRV PSD
+        t_uniform = np.arange(t_start, t_end, 1.0 / fs_interp)
+        if len(t_uniform) >= 4:
+            ibi_uniform = np.interp(t_uniform, ibi_cumtime, ibi_sec)
+            nperseg = min(len(ibi_uniform), 256)
+            freqs, psd = welch(ibi_uniform, fs=fs_interp, nperseg=nperseg)
             lf_band = (freqs >= 0.04) & (freqs <= 0.15)
             hf_band = (freqs >= 0.15) & (freqs <= 0.4)
             df = freqs[1] - freqs[0] if len(freqs) > 1 else 0.0
-
             lf_power = np.sum(psd[lf_band]) * df
             hf_power = np.sum(psd[hf_band]) * df
-
             lf_hf = lf_power / hf_power if hf_power > 0 else 0.0
         else:
             lf_hf = 0.0
@@ -454,12 +366,8 @@ def process_rppg(
     Returns:
         dict: comprehensive results containing 'pulse_signal', 'ibi_ms', 'confidence', etc.
     """
-    # 1. Motion
-    if motion_scores is not None:
-        motion_fraction = float((motion_scores > 0.05).mean())
-    else:
-        bad_frames = detect_motion_frames(rgb_raw)
-        motion_fraction = float(bad_frames.mean())
+    # Motion pre-filtering removed per request. POS handles noise internally.
+    motion_fraction = 0.0
 
     # 2. Preprocess (POS needs channel means intact)
     rgb_detrended = detrend_rgb(rgb_raw)
@@ -476,23 +384,6 @@ def process_rppg(
     )
 
 
-def _evaluate_pulse_candidate(
-    pulse: np.ndarray,
-    fps: float,
-    motion_fraction: float,
-    method_used: str,
-    n_frames: int,
-) -> dict:
-    """Score one pulse candidate using the same post-processing path as POS."""
-    return _summarize_pulse(
-        pulse=pulse,
-        fps=fps,
-        motion_fraction=motion_fraction,
-        method_used=method_used,
-        n_frames=n_frames,
-    )
-
-
 def _bpm_from_ibi(ibi_ms: np.ndarray) -> float | None:
     if ibi_ms.size == 0:
         return None
@@ -506,16 +397,20 @@ def _summarize_pulse(
     method_used: str,
     n_frames: int,
 ) -> dict:
-    pulse = remove_motion_artifacts(pulse, fps, method="savgol")
+    # remove_motion_artifacts (Savgol) removed to prevent signal distortion
     peaks_idx, ibi_ms, clean_pulse = extract_pulse_waveform(pulse, fps)
     confidence, details, is_reliable = compute_confidence_score(clean_pulse, fps, ibi_ms)
     hrv_features = compute_hrv_features(ibi_ms)
+    
+    bpm = _bpm_from_ibi(ibi_ms)
+    
     return {
         "pulse_signal": clean_pulse,
         "timestamps": np.arange(n_frames) / fps,
         "fps": fps,
         "peaks_idx": peaks_idx,
         "ibi_ms": ibi_ms,
+        "bpm": bpm,
         "confidence": confidence,
         "is_reliable": is_reliable,
         "confidence_details": details,
@@ -526,153 +421,3 @@ def _summarize_pulse(
         "duration_sec": n_frames / fps,
     }
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 7. DEEP MODEL FUSION (POS + Neural Network)
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def fuse_pos_deep(
-    pulse_pos: np.ndarray,
-    pulse_deep: np.ndarray,
-    fps: float,
-    deep_available: bool,
-) -> tuple[np.ndarray, str]:
-    """
-    Fuse POS and deep model signals using frequency-domain SNR as the selector.
-
-    Strategy:
-    - Compute spectral_peak_snr for both signals
-    - If deep model SNR > POS SNR by > 20%: use deep model
-    - Otherwise: weighted average (POS * 0.4 + deep * 0.6) if both reliable
-    - Fallback: POS only
-
-    Returns:
-        (fused_signal, method_label)
-    """
-    if not deep_available or np.all(pulse_deep == 0):
-        return pulse_pos, "pos_only"
-
-    snr_pos  = spectral_peak_snr(pulse_pos,  fps)
-    snr_deep = spectral_peak_snr(pulse_deep, fps)
-
-    print(f"[fusion] SNR — POS: {snr_pos:.2f} | Deep: {snr_deep:.2f}")
-
-    if snr_deep > snr_pos * 1.20:
-        # Deep model clearly wins
-        return pulse_deep, "deep_model"
-    elif snr_pos > snr_deep * 1.20:
-        # POS clearly wins
-        return pulse_pos, "pos_only"
-    else:
-        # Similar quality — weighted ensemble (trust deep slightly more)
-        fused = 0.40 * pulse_pos + 0.60 * pulse_deep
-        return fused, "pos+deep_ensemble"
-
-
-def process_rppg_with_deep(
-    rgb_raw: np.ndarray,
-    fps: float = 30.0,
-    face_frames: np.ndarray | None = None,
-    motion_scores: np.ndarray | None = None,
-    selection_mode: str = "best_confidence",
-    deep_max_frames: int | None = None,
-) -> dict:
-    """
-    Advanced rPPG pipeline fusing statistical POS and deep learning models.
-
-    Runs both POS and the deep neural model (if face frames are available and 
-    capable), then selects or fuses the signals based on frequency-domain SNR 
-    and guardrail consistency checks.
-
-    Args:
-        rgb_raw: (N, 3) matrix of mean RGB per frame.
-        fps: The sampling rate.
-        face_frames: (N, H, W, 3) BGR face crops for the deep model.
-        motion_scores: Optional pre-calculated motion data.
-        selection_mode: 'best_confidence' to pick best sig, or 'fuse' for ensemble.
-        deep_max_frames: Max frames to send to the deep model to prevent memory issues.
-
-    Returns:
-        dict: Full result set including the 'selected_source' and 'is_reliable' status.
-    """
-    from deep_rppg import extract_bvp_deep, is_deep_model_available
-
-    # POS runs first so the app can display an estimate quickly.
-    pos_result = process_rppg(rgb_raw, fps=fps, motion_scores=motion_scores)
-    pulse_pos = pos_result["pulse_signal"]
-
-    deep_available = False
-    pulse_deep = np.zeros_like(pulse_pos)
-    deep_model_name = "none"
-
-    if face_frames is not None and is_deep_model_available():
-        try:
-            pulse_deep, deep_model_name = extract_bvp_deep(
-                face_frames,
-                fps,
-                max_frames=deep_max_frames,
-            )
-            pulse_deep = bandpass_filter(pulse_deep, fps)
-            deep_available = not np.all(pulse_deep == 0)
-        except Exception as e:
-            print(f"[rppg_core] Deep model error: {e}")
-
-    deep_result = None
-    if deep_available:
-        deep_result = _evaluate_pulse_candidate(
-            pulse=pulse_deep,
-            fps=fps,
-            motion_fraction=float(pos_result["motion_fraction"]),
-            method_used="deep_model",
-            n_frames=len(rgb_raw),
-        )
-
-    result = pos_result.copy()
-    selected = "pos"
-    if deep_result is not None:
-        if selection_mode == "fuse":
-            fused_pulse, fusion_method = fuse_pos_deep(pulse_pos, pulse_deep, fps, True)
-            fused_result = _evaluate_pulse_candidate(
-                pulse=fused_pulse,
-                fps=fps,
-                motion_fraction=float(pos_result["motion_fraction"]),
-                method_used=fusion_method,
-                n_frames=len(rgb_raw),
-            )
-            result = fused_result
-            selected = fusion_method
-        else:
-            if float(deep_result["confidence"]) > float(pos_result["confidence"]):
-                result = deep_result
-                selected = "deep_model"
-
-    result.update(
-        {
-            "deep_model_used": deep_model_name,
-            "selected_source": selected,
-            "selection_mode": selection_mode,
-            "pos_confidence": float(pos_result["confidence"]),
-            "deep_confidence": float(deep_result["confidence"]) if deep_result else 0.0,
-            "pos_snr": spectral_peak_snr(pulse_pos, fps),
-            "deep_snr": spectral_peak_snr(pulse_deep, fps) if deep_available else 0.0,
-        }
-    )
-
-    pos_bpm = _bpm_from_ibi(pos_result["ibi_ms"])
-    deep_bpm = _bpm_from_ibi(deep_result["ibi_ms"]) if deep_result else None
-    agreement_ok = True
-    if pos_bpm is not None and deep_bpm is not None:
-        agreement_ok = abs(pos_bpm - deep_bpm) <= 18.0
-
-    confidence_ok = float(result["confidence"]) >= 0.50
-    reliability_ok = bool(result["is_reliable"])
-    result["is_reliable"] = bool(reliability_ok and confidence_ok and agreement_ok)
-    result["guardrails"] = {
-        "confidence_ok": confidence_ok,
-        "agreement_ok": agreement_ok,
-        "pos_bpm": pos_bpm,
-        "deep_bpm": deep_bpm,
-    }
-
-    return result

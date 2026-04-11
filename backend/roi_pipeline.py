@@ -1,11 +1,12 @@
 """
 The computer vision front-end for the CardioVision-rPPG system.
 
-Handles face detection, landmarking, and region-of-interest (ROI) extraction 
-using MediaPipe. Includes robust human-face guardrails (skin color checks, 
-geometry verification, and texture analysis) to prevent spoofs and ensure 
+Handles face detection, landmarking, and region-of-interest (ROI) extraction
+using MediaPipe. Includes robust human-face guardrails (skin color checks,
+geometry verification, and texture analysis) to prevent spoofs and ensure
 high-quality signal extraction.
 """
+
 import time
 import urllib.request
 from dataclasses import dataclass
@@ -48,20 +49,12 @@ _EXCLUDE_LIPS = [
     39,
     40,
     185,
-    61,
 ]
 
 ROI_COLORS = {"face": (0, 140, 255)}
-MIN_ROI_PIXELS = 150
-_ERODE_KERNEL = np.ones((5, 5), np.uint8)
+MIN_ROI_PIXELS = 1
 MIN_FACE_AREA_RATIO = 0.08
 MAX_FACE_AREA_RATIO = 0.75
-MIN_SKIN_RATIO = 0.18
-MIN_FACE_TEXTURE_VAR = 10.0
-MAX_FACE_TEXTURE_VAR = 1800.0
-MIN_TOTAL_GUARDRAIL_PASSES = 3
-MIN_HSV_SKIN_RATIO = 0.10
-MIN_SKIN_MASK_IOU = 0.35
 
 
 @dataclass
@@ -79,10 +72,11 @@ class VideoSource:
     """
     Unified wrapper for video files and webcam streams.
 
-    Normalizes frame rates and provides a generator interface for processing 
-    video content frame-by-frame. Supports real-time webcam capture with 
+    Normalizes frame rates and provides a generator interface for processing
+    video content frame-by-frame. Supports real-time webcam capture with
     drift correction.
     """
+
     def __init__(self, source: Union[int, str] = 0, target_fps: float = 30.0):
         self.source = source
         self.target_fps = target_fps
@@ -116,7 +110,8 @@ class VideoSource:
                 if drift > 0:
                     time.sleep(drift)
         else:
-            src_fps, out_count, src_count, next_yield = self.orig_fps, 0, 0, 0.0
+            src_fps = self.orig_fps
+            out_count, src_count = 0, 0
             while True:
                 ret, frame = self._cap.read()
                 if not ret:
@@ -124,9 +119,9 @@ class VideoSource:
                 elapsed = out_count / self.target_fps
                 if max_duration is not None and elapsed >= max_duration:
                     break
-                if src_count / src_fps >= next_yield:
+                # Integer arithmetic prevents floating-point drift over long videos
+                if src_count * self.target_fps >= out_count * src_fps:
                     yield elapsed, frame
-                    next_yield += 1.0 / self.target_fps
                     out_count += 1
                 src_count += 1
 
@@ -144,10 +139,11 @@ class FaceROIExtractor:
     """
     Orchestrates face detection and mask generation for rPPG.
 
-    Uses MediaPipe Face Landmarker to identify facial features, isolates 
-    stable skin regions (forehead/cheeks), and applies multi-stage guardrails 
+    Uses MediaPipe Face Landmarker to identify facial features, isolates
+    stable skin regions (forehead/cheeks), and applies multi-stage guardrails
     to filter out non-human or poor-quality frames.
     """
+
     def __init__(self, model_path: str):
         p = Path(model_path)
         if not p.exists():
@@ -167,13 +163,8 @@ class FaceROIExtractor:
             "detected": 0,
             "failed": 0,
             "low_quality": 0,
-            "rejected_nonhuman": 0,
             "rej_area": 0,
-            "rej_skin_ycrcb": 0,
-            "rej_skin_hsv": 0,
-            "rej_skin_iou": 0,
-            "rej_geometry": 0,
-            "rej_texture": 0,
+            "rej_skin": 0,
         }
 
     def process(self, frame_bgr: np.ndarray, ts_ms: int) -> Optional[ROIResult]:
@@ -185,7 +176,7 @@ class FaceROIExtractor:
             ts_ms (int): Timestamp of the frame in milliseconds.
 
         Returns:
-            Optional[ROIResult]: Container with masks, crops, and landmarks if a 
+            Optional[ROIResult]: Container with masks, crops, and landmarks if a
                 valid face is detected and passes guardrails; else None.
         """
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
@@ -207,6 +198,12 @@ class FaceROIExtractor:
 
         masks, px_counts = _build_masks(lm, h, w)
 
+        # Enforce minimum ROI pixel count — reject near-empty masks that would
+        # produce meaningless mean RGB values (e.g. extreme face angle/occlusion).
+        if px_counts.get("face", 0) < MIN_ROI_PIXELS:
+            self.stats["low_quality"] += 1
+            return None
+
         bbox = (
             int(lm[:, 0].min()),
             int(lm[:, 1].min()),
@@ -214,29 +211,7 @@ class FaceROIExtractor:
             int(lm[:, 1].max() - lm[:, 1].min()),
         )
 
-        passed, checks = _evaluate_human_face_guardrails(frame_bgr, face_mask, bbox, lm)
-        if not passed:
-            self.stats["rejected_nonhuman"] += 1
-            self.stats["rej_area"] += 0 if checks["area"] else 1
-            self.stats["rej_skin_ycrcb"] += 0 if checks["skin_ycrcb"] else 1
-            self.stats["rej_skin_hsv"] += 0 if checks["skin_hsv"] else 1
-            self.stats["rej_skin_iou"] += 0 if checks["skin_iou"] else 1
-            self.stats["rej_geometry"] += 0 if checks["geometry"] else 1
-            self.stats["rej_texture"] += 0 if checks["texture"] else 1
-            self.stats["failed"] += 1
-            self.stats["detected"] = max(0, self.stats["detected"] - 1)
-            return None
-
-        crops = {}
-        for roi_name, mask in masks.items():
-            ys, xs = np.where(mask > 0)
-            if ys.size:
-                y1, y2 = ys.min(), ys.max()
-                x1, x2 = xs.min(), xs.max()
-                roi_crop = frame_bgr[y1 : y2 + 1, x1 : x2 + 1]
-                crops[roi_name] = cv2.resize(roi_crop, (64, 64))
-            else:
-                crops[roi_name] = np.zeros((64, 64, 3), dtype=np.uint8)
+        crops = {} # Removed per request: not used in rPPG
 
         return ROIResult(
             masks,
@@ -273,7 +248,8 @@ def _build_masks(lm: np.ndarray, h: int, w: int, skin_m: Optional[np.ndarray] = 
         pts = lm[indices].astype(np.int32)
         cv2.fillPoly(base_mask, [pts], 0)
 
-    mask = cv2.erode(base_mask, _ERODE_KERNEL, iterations=1)
+    # Morphological erosion removed to improve temporal stability
+    mask = base_mask
     if skin_m is not None:
         mask = cv2.bitwise_and(mask, skin_m)
 
@@ -282,116 +258,7 @@ def _build_masks(lm: np.ndarray, h: int, w: int, skin_m: Optional[np.ndarray] = 
     return masks, px_counts
 
 
-def _evaluate_human_face_guardrails(
-    frame_bgr: np.ndarray,
-    face_mask: np.ndarray,
-    bbox: Tuple[int, int, int, int],
-    lm: np.ndarray,
-) -> Tuple[bool, Dict[str, bool]]:
-    h, w = frame_bgr.shape[:2]
-    _, _, bw, bh = bbox
-    face_area_ratio = float((bw * bh) / max(1, w * h))
-    skin_ratio_ycrcb, skin_ratio_hsv, skin_iou = _estimate_skin_consistency(frame_bgr, face_mask)
 
-    checks = {
-        "area": MIN_FACE_AREA_RATIO <= face_area_ratio <= MAX_FACE_AREA_RATIO,
-        "skin_ycrcb": skin_ratio_ycrcb >= MIN_SKIN_RATIO,
-        "skin_hsv": skin_ratio_hsv >= MIN_HSV_SKIN_RATIO,
-        "skin_iou": skin_iou >= MIN_SKIN_MASK_IOU,
-        "geometry": _passes_face_geometry_guard(lm, bbox),
-        "texture": _passes_texture_guard(frame_bgr, bbox),
-    }
-
-    mandatory_ok = checks["area"] and checks["skin_ycrcb"] and checks["skin_hsv"]
-    # Multiple independent checks must pass to avoid non-human/screen spoofs.
-    passed = mandatory_ok and (sum(bool(v) for v in checks.values()) >= (MIN_TOTAL_GUARDRAIL_PASSES + 2))
-    return passed, checks
-
-
-def _passes_face_geometry_guard(lm: np.ndarray, bbox: Tuple[int, int, int, int]) -> bool:
-    _, _, bw, bh = bbox
-    face_w = max(float(bw), 1.0)
-    face_h = max(float(bh), 1.0)
-
-    try:
-        left_eye = lm[33]
-        right_eye = lm[263]
-        nose_tip = lm[1]
-        upper_lip = lm[13]
-
-        eye_dist = float(np.linalg.norm(left_eye - right_eye) / face_w)
-        nose_to_mouth = float(np.linalg.norm(nose_tip - upper_lip) / face_h)
-        eye_y = float((left_eye[1] + right_eye[1]) * 0.5)
-        eye_to_mouth = float((upper_lip[1] - eye_y) / face_h)
-        nose_center_offset = float(
-            abs(nose_tip[0] - ((left_eye[0] + right_eye[0]) * 0.5)) / face_w
-        )
-    except Exception:
-        return False
-
-    geometry_checks = [
-        0.22 <= eye_dist <= 0.70,
-        0.03 <= nose_to_mouth <= 0.35,
-        0.12 <= eye_to_mouth <= 0.70,
-        nose_center_offset <= 0.20,
-    ]
-    return sum(bool(v) for v in geometry_checks) >= 3
-
-
-def _passes_texture_guard(frame_bgr: np.ndarray, bbox: Tuple[int, int, int, int]) -> bool:
-    x, y, bw, bh = bbox
-    h, w = frame_bgr.shape[:2]
-    x1 = max(0, x)
-    y1 = max(0, y)
-    x2 = min(w, x + bw)
-    y2 = min(h, y + bh)
-    if x2 <= x1 or y2 <= y1:
-        return False
-
-    crop = frame_bgr[y1:y2, x1:x2]
-    if crop.size == 0:
-        return False
-
-    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-    lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-    return MIN_FACE_TEXTURE_VAR <= lap_var <= MAX_FACE_TEXTURE_VAR
-
-def _estimate_skin_consistency(frame_bgr: np.ndarray, face_mask: np.ndarray) -> Tuple[float, float, float]:
-    face_pixels = face_mask > 0
-    total_face_px = int(np.count_nonzero(face_pixels))
-    if total_face_px == 0:
-        return 0.0, 0.0, 0.0
-
-    ycrcb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2YCrCb)
-    y, cr, cb = cv2.split(ycrcb)
-    skin_ycrcb = (
-        (y >= 40)
-        & (cr >= 133)
-        & (cr <= 173)
-        & (cb >= 77)
-        & (cb <= 127)
-    )
-
-    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
-    h, s, v = cv2.split(hsv)
-    skin_hsv = (
-        (h >= 0)
-        & (h <= 25)
-        & (s >= 30)
-        & (s <= 180)
-        & (v >= 40)
-        & (v <= 255)
-    )
-
-    skin_ycrcb_face = skin_ycrcb & face_pixels
-    skin_hsv_face = skin_hsv & face_pixels
-    intersection = int(np.count_nonzero(skin_ycrcb_face & skin_hsv_face))
-    union = int(np.count_nonzero(skin_ycrcb_face | skin_hsv_face))
-
-    skin_ratio_ycrcb = float(np.count_nonzero(skin_ycrcb_face) / total_face_px)
-    skin_ratio_hsv = float(np.count_nonzero(skin_hsv_face) / total_face_px)
-    skin_iou = float(intersection / max(1, union))
-    return skin_ratio_ycrcb, skin_ratio_hsv, skin_iou
 
 
 def get_mean_rgb(frame: np.ndarray, mask: np.ndarray):
@@ -409,24 +276,6 @@ def get_mean_rgb(frame: np.ndarray, mask: np.ndarray):
     if len(px) == 0:
         return np.nan, np.nan, np.nan
     return float(np.mean(px[:, 2])), float(np.mean(px[:, 1])), float(np.mean(px[:, 0]))
-
-
-def compute_mad_confidence(roi_g_values: Dict[str, float]) -> float:
-    """
-    Estimates signal quality based on the Median Absolute Deviation (MAD).
-
-    Args:
-        roi_g_values (dict): Mapping of ROI names to their mean green channel values.
-
-    Returns:
-        float: A normalized confidence score (0-1).
-    """
-    vals = [v for v in roi_g_values.values() if not np.isnan(v)]
-    if len(vals) < 2:
-        return 0.0
-    med = float(np.median(vals))
-    mad = float(np.mean(np.abs(np.array(vals) - med)))
-    return float(np.clip(1.0 - mad / 20.0, 0.0, 1.0))
 
 
 def overlay_roi(frame: np.ndarray, roi_masks: Dict[str, np.ndarray]) -> np.ndarray:

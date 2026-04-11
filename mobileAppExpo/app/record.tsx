@@ -192,7 +192,6 @@ export default function RecordScreen() {
   const [countdownN, setCountdownN] = useState(3);
   const [timeLeft, setTimeLeft] = useState(RECORD_DURATION);
   const [progress, setProgress] = useState(0);
-  const [quality, setQuality] = useState(0);
   const [liveBpm, setLiveBpm] = useState<number | null>(null);
   const [liveMethod, setLiveMethod] = useState("pending");
   const [isTimerPaused, setIsTimerPaused] = useState(false);
@@ -209,22 +208,10 @@ export default function RecordScreen() {
   } | null> | null>(null);
   const usingLiveStreamRef = useRef(false);
   const pausedRef = useRef(false);
-  const qualityAnim = useRef(new Animated.Value(0)).current;
-  // Accelerometer buffer for micro-tremor detection
-  const accelSamplesRef = useRef<{ x: number; y: number; z: number }[]>([]);
-  const accelSubRef = useRef<ReturnType<typeof Accelerometer.addListener> | null>(null);
 
   useEffect(() => {
     if (!permission?.granted) requestPermission();
   }, [permission?.granted, requestPermission]);
-
-  useEffect(() => {
-    Animated.timing(qualityAnim, {
-      toValue: quality,
-      duration: 300,
-      useNativeDriver: false,
-    }).start();
-  }, [quality, qualityAnim]);
 
   useEffect(() => {
     return () => {
@@ -263,32 +250,16 @@ export default function RecordScreen() {
         overlayMaxSide: 0,
         overlayStride: 999,
         onFrame: (frame: any) => {
-          setQuality(frame.metric?.confidence ?? frame.confidence ?? 0);
           setLiveBpm(frame.metric?.bpm ?? frame.bpm ?? null);
           setLiveMethod(frame.metric?.method ?? frame.method ?? "pending");
-          // No overlay display needed — we use SVG ROI highlights instead.
-          if (
-            frame.intruder_detected ||
-            (frame.identity_locked && !frame.identity_match)
-          ) {
-            setIsTimerPaused(true);
-            pausedRef.current = true;
-            setPauseReason("unknown_person");
-            setSnack({
-              msg: "Unknown person seen. Waiting for original person to return.",
-              show: true,
-              key: Date.now(),
-            });
-            return;
-          }
 
           if (!frame.has_face) {
-            if (frame.identity_locked) {
+            if (!pausedRef.current) {
               setIsTimerPaused(true);
               pausedRef.current = true;
               setPauseReason("face_lost");
               setSnack({
-                msg: "Primary face lost. Timer paused until face is back.",
+                msg: "Face lost. Timer paused.",
                 show: true,
                 key: Date.now(),
               });
@@ -301,7 +272,7 @@ export default function RecordScreen() {
             pausedRef.current = false;
             setPauseReason("none");
             setSnack({
-              msg: "Primary face reacquired. Timer resumed.",
+              msg: "Face reacquired. Resuming...",
               show: true,
               key: Date.now(),
             });
@@ -320,7 +291,6 @@ export default function RecordScreen() {
 
     setIsRecording(true);
     setTimeLeft(RECORD_DURATION);
-    setQuality(0);
     setLiveBpm(null);
     setLiveMethod("pending");
     setIsTimerPaused(false);
@@ -455,7 +425,6 @@ export default function RecordScreen() {
     setCountdown3(false);
     setTimeLeft(RECORD_DURATION);
     setProgress(0);
-    setQuality(0);
     setLiveBpm(null);
     setLiveMethod("pending");
     setIsTimerPaused(false);
@@ -488,10 +457,6 @@ export default function RecordScreen() {
     );
   }
 
-  const qualityW = qualityAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ["0%", "100%"],
-  });
   const dashOffset = CIRC * (1 - progress);
 
   return (
@@ -576,34 +541,6 @@ export default function RecordScreen() {
 
         <View style={{ flex: 1 }} />
 
-        {/* Signal quality bar (during recording) */}
-        {isRecording && (
-          <View style={styles.metricsArea}>
-            <View style={styles.triagePill}>
-              <Ionicons
-                name="shield-checkmark-outline"
-                size={14}
-                color={accent.light}
-              />
-              <Text style={styles.triageText}>Biometric Mode</Text>
-            </View>
-            <View style={styles.qualityBar}>
-              <Text style={styles.qualityLabel}>Signal Quality</Text>
-              <View style={styles.qualityTrack}>
-                <Animated.View
-                  style={[
-                    styles.qualityFill,
-                    { width: qualityW, backgroundColor: accent.primary },
-                  ]}
-                />
-              </View>
-              <Text style={styles.qualityPct}>
-                {Math.round(quality * 100)}%
-              </Text>
-            </View>
-          </View>
-        )}
-
         {/* Tips — positioned BELOW the oval, not overlapping */}
         {!isRecording && !countdown3 && (
           <View style={styles.tipsCard}>
@@ -611,7 +548,6 @@ export default function RecordScreen() {
               { icon: "sunny-outline", tip: "Ensure your face is well-lit" },
               { icon: "resize-outline", tip: "Keep phone at arm's length" },
               { icon: "body-outline", tip: "Remain still during recording" },
-              { icon: "contrast-outline", tip: "Avoid backlit environments" },
             ].map((t, i) => (
               <View key={i} style={styles.tipRow}>
                 <Ionicons
@@ -803,57 +739,6 @@ const styles = StyleSheet.create({
   },
 
   // Metrics during recording
-  metricsArea: { paddingHorizontal: Spacing.lg, marginBottom: Spacing.sm },
-  triagePill: {
-    flexDirection: "row",
-    alignItems: "center",
-    alignSelf: "center",
-    backgroundColor: "rgba(57,68,188,0.15)",
-    borderRadius: Radius.full,
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    marginBottom: 10,
-    gap: 6,
-  },
-  triageText: {
-    fontFamily: "SpaceGrotesk-Medium",
-    fontSize: 11,
-    color: "rgba(57,68,188,0.9)",
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
-  },
-  qualityBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderRadius: Radius.md,
-    padding: Spacing.md,
-  },
-  qualityLabel: {
-    fontFamily: "SpaceGrotesk-Medium",
-    fontSize: 10,
-    color: "rgba(255,255,255,0.4)",
-    width: 64,
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
-  },
-  qualityTrack: {
-    flex: 1,
-    height: 3,
-    backgroundColor: "rgba(255,255,255,0.12)",
-    borderRadius: 2,
-    marginHorizontal: 10,
-    overflow: "hidden",
-  },
-  qualityFill: { height: "100%", borderRadius: 2 },
-  qualityPct: {
-    fontFamily: "SpaceGrotesk-Regular",
-    fontSize: 13,
-    color: "rgba(255,255,255,0.5)",
-    width: 36,
-    textAlign: "right",
-  },
-
   // Tips — below oval
   tipsCard: {
     marginHorizontal: Spacing.lg,
