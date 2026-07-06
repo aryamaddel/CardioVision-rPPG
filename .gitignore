@@ -1,3 +1,7 @@
 __pycache__/
 test_video/
 .DS_Store
+face_landmarker.task
+output/
+vid.avi
+ground_truth.txt
