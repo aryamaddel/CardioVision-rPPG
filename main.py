@@ -14,7 +14,6 @@ import cv2
 import numpy as np
 
 from rppg import FaceTracker, process_video
-from evm_magnifier import PulseMagnifier
 
 DEFAULT_MODEL = str(Path(__file__).with_name("face_landmarker.task"))
 
@@ -46,7 +45,6 @@ def main():
     min_frames = int(fps * args.window)
 
     tracker = FaceTracker(args.model_path)
-    magnifier = PulseMagnifier(fps=fps)
 
     rgb_buffer = []
     result = {"bpm": None}
@@ -79,23 +77,7 @@ def main():
         cv2.putText(roi_vis, f"Frames: {len(rgb_buffer)}", (20, 80),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (180, 180, 180), 1)
 
-        evm_vis = magnifier.process(frame)
-        if magnifier.warm:
-            h, w = evm_vis.shape[:2]
-            overlay_bgr = evm_vis[:56]
-            evm_vis[:56] = (overlay_bgr * 0.4).astype(np.uint8)
-            cv2.putText(evm_vis, "PULSE MAGNIFIER (EVM)", (10, 22),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 255, 180), 1)
-            cv2.putText(evm_vis, bpm_text, (10, 48),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-
-        h1, w1 = roi_vis.shape[:2]
-        h2, w2 = evm_vis.shape[:2]
-        if h1 != h2:
-            evm_vis = cv2.resize(evm_vis, (int(w2 * h1 / h2), h1))
-        combined = np.hstack([roi_vis, evm_vis])
-
-        cv2.imshow("rPPG  [Q to quit]", combined)
+        cv2.imshow("rPPG  [Q to quit]", roi_vis)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 

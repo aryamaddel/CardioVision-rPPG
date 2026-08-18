@@ -8,4 +8,4 @@ python main.py --source video.mp4           # video file
 python main.py --source 1 --window 8        # camera 1, 8s window
 ```
 
-Left window: face ROI + BPM. Right window: Eulerian Video Magnification.
+Displays face ROI with BPM overlay.
