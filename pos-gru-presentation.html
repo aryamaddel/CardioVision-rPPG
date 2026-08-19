@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>POS-GRU Hybrid rPPG</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --fg: #1b2430;
+    --muted: #5c6b7d;
+    --accent: #0f766e;
+    --accent-soft: #ccfbf1;
+    --line: #dbe2ea;
+    --warn: #b45309;
+    --card: #ffffff;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: var(--bg); color: var(--fg); overflow: hidden;
+  }
+
+  .deck { height: 100vh; position: relative; }
+
+  .slide {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    padding: 48px 64px;
+    opacity: 0; visibility: hidden; transform: translateX(24px);
+    transition: opacity .35s ease, transform .35s ease, visibility .35s;
+  }
+  .slide.active { opacity: 1; visibility: visible; transform: translateX(0); }
+
+  .content { width: 100%; max-width: 1060px; }
+
+  .kicker {
+    display: inline-block; font-size: 12px; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--accent); font-weight: 600; margin-bottom: 8px;
+  }
+  h1 { font-size: 42px; line-height: 1.1; font-weight: 700; letter-spacing: -0.02em; }
+  h2 { font-size: 28px; line-height: 1.15; font-weight: 700; margin-bottom: 18px; }
+  h3 { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+  p { line-height: 1.5; }
+  .muted { color: var(--muted); }
+
+  .grid { display: grid; gap: 16px; }
+  .cols-2 { grid-template-columns: 1fr 1fr; }
+  .cols-3 { grid-template-columns: repeat(3, 1fr); }
+  .cols-4 { grid-template-columns: repeat(4, 1fr); }
+
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px 18px; box-shadow: 0 1px 2px rgba(16,24,40,.04);
+  }
+  .card p, .card li { font-size: 14px; }
+
+  ul { list-style: none; }
+  li { padding-left: 20px; margin: 6px 0; line-height: 1.45; font-size: 14px; position: relative; }
+  li::before { content: "—"; position: absolute; left: 0; color: var(--accent); font-weight: 600; }
+  li strong { color: var(--fg); }
+
+  /* flow diagram */
+  .flow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center; }
+  .flow .box {
+    background: var(--card); border: 1.5px solid var(--line); border-radius: 10px;
+    padding: 10px 12px; font-size: 12px; font-weight: 500; text-align: center;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .flow .box.accent { border-color: var(--accent); background: var(--accent-soft); color: #0b4f4a; font-weight: 600; }
+  .flow .arrow { color: var(--muted); font-size: 14px; font-weight: 700; }
+  .pipeline { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+  .pipeline .flow { margin: 8px 0; }
+
+  /* charts */
+  .chart-box { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+  .chart-box .sub { font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+  svg { display: block; width: 100%; height: auto; }
+  .legend { display: flex; gap: 14px; margin-top: 6px; font-size: 11px; color: var(--muted); flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .legend .sw { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+
+  /* hypotheses */
+  .hyp { display: flex; gap: 12px; align-items: flex-start; padding: 13px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+  .hyp .tag {
+    flex: none; font-size: 11px; font-weight: 700; color: var(--accent);
+    background: var(--accent-soft); border-radius: 8px; padding: 3px 8px; letter-spacing: .05em;
+  }
+  .hyp p { font-size: 13px; }
+
+  .stage { display: flex; gap: 12px; align-items: center; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 13px 15px; }
+  .stage .n {
+    flex: none; width: 28px; height: 28px; border-radius: 50%;
+    background: var(--accent); color: #fff; font-weight: 700;
+    display: flex; align-items: center; justify-content: center; font-size: 13px;
+  }
+  .stage .t { font-size: 14px; font-weight: 600; }
+  .stage .d { font-size: 12px; color: var(--muted); }
+
+  /* GRU cell diagram */
+  .gru {
+    display: flex; align-items: center; justify-content: center; gap: 10px; margin: 6px 0;
+  }
+  .gru .in, .gru .out {
+    background: var(--card); border: 1.5px solid var(--line); border-radius: 10px;
+    padding: 8px 12px; font-size: 12px; font-weight: 600;
+  }
+  .gru .cell {
+    background: var(--accent-soft); border: 1.5px solid var(--accent); border-radius: 12px;
+    padding: 12px 14px; text-align: center;
+  }
+  .gru .cell .name { font-size: 13px; font-weight: 700; color: #0b4f4a; }
+  .gru .cell .gates { display: flex; gap: 6px; margin-top: 8px; }
+  .gru .gate {
+    background: var(--card); border: 1px solid var(--accent); color: #0b4f4a;
+    border-radius: 8px; padding: 3px 8px; font-size: 11px; font-weight: 600;
+  }
+  .gru .arrow { color: var(--muted); font-size: 16px; font-weight: 700; }
+  .gru .loop { font-size: 10px; color: var(--muted); text-align: center; }
+  .gru .in small, .gru .out small { display: block; font-weight: 400; color: var(--muted); font-size: 10px; }
+
+  .mode {
+    display: flex; gap: 8px; justify-content: center; align-items: center; flex-wrap: wrap;
+  }
+  .mode .chip {
+    border: 1.5px solid var(--line); border-radius: 10px; padding: 8px 12px;
+    font-size: 12px; font-weight: 600; background: var(--card);
+  }
+  .mode .chip.hot { border-color: var(--accent); background: var(--accent-soft); color: #0b4f4a; }
+
+  /* controls */
+  .controls {
+    position: fixed; bottom: 20px; left: 0; right: 0;
+    display: flex; align-items: center; justify-content: center; gap: 14px;
+    font-size: 13px; color: var(--muted); pointer-events: none;
+  }
+  .dots { display: flex; gap: 7px; }
+  .dots button { pointer-events: auto; width: 9px; height: 9px; border-radius: 50%; border: none; background: var(--line); cursor: pointer; padding: 0; }
+  .dots button.on { background: var(--accent); transform: scale(1.25); }
+  .counter { font-variant-numeric: tabular-nums; }
+  .btn { pointer-events: auto; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 5px 12px; cursor: pointer; font-size: 13px; color: var(--fg); }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  .badge { position: fixed; top: 20px; right: 28px; font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div class="badge">CardioVision-rPPG</div>
+
+<div class="deck">
+
+  <!-- 1 · TITLE -->
+  <section class="slide active">
+    <div class="content" style="text-align:center;">
+      <span class="kicker">Research proposal</span>
+      <h1>POS-GRU Hybrid rPPG</h1>
+      <p style="margin:12px auto 24px; max-width:520px; font-size:18px;" class="muted">
+        Refining POS pulse estimates with a gated recurrent unit
+      </p>
+      <div style="max-width:720px; margin:0 auto;">
+        <svg viewBox="0 0 720 200" role="img" aria-label="POS waveform refined by GRU">
+          <path id="titleNoisy" fill="none" stroke="#94a3b8" stroke-width="2" stroke-dasharray="4 3" opacity="0.55"></path>
+          <path id="titleClean" fill="none" stroke="#0f766e" stroke-width="3"></path>
+          <text x="700" y="28" text-anchor="end" font-size="12" fill="#94a3b8" font-family="sans-serif">POS (noisy)</text>
+          <text x="700" y="178" text-anchor="end" font-size="12" fill="#0f766e" font-family="sans-serif">POS + GRU</text>
+        </svg>
+      </div>
+      <p style="margin-top:16px; font-size:13px;" class="muted">facial video &nbsp;·&nbsp; POS baseline + learned temporal refinement &nbsp;·&nbsp; no new physiology</p>
+    </div>
+  </section>
+
+  <!-- 2 · MOTIVATION -->
+  <section class="slide">
+    <div class="content">
+      <span class="kicker">01 · Motivation</span>
+      <h2>The problem</h2>
+      <div class="grid cols-2">
+        <div class="card">
+          <h3>Today — POS works</h3>
+          <div class="flow" style="justify-content:flex-start;">
+            <div class="box">Video</div><div class="arrow">→</div>
+            <div class="box">Skin ROI</div><div class="arrow">→</div>
+            <div class="box">POS pulse</div><div class="arrow">→</div>
+            <div class="box">BPM</div>
+          </div>
+          <ul style="margin-top:10px;">
+            <li>No learned parameters, interpretable, established</li>
+            <li>Encodes a chrominance model of skin reflectance</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>Where it fails</h3>
+          <div class="grid cols-4" style="gap:8px;">
+            <div class="chart-box" style="text-align:center; padding:10px 6px;"><div style="font-size:20px;">↔️</div><div class="sub" style="margin:0;">motion</div></div>
+            <div class="chart-box" style="text-align:center; padding:10px 6px;"><div style="font-size:20px;">💡</div><div class="sub" style="margin:0;">illumination</div></div>
+            <div class="chart-box" style="text-align:center; padding:10px 6px;"><div style="font-size:20px;">🖼️</div><div class="sub" style="margin:0;">compression</div></div>
+            <div class="chart-box" style="text-align:center; padding:10px 6px;"><div style="font-size:20px;">🎯</div><div class="sub" style="margin:0;">tracking</div></div>
+          </div>
+          <p class="muted" style="font-size:13px; margin-top:10px;">
+            All of these corrupt the signal <strong>temporally</strong> — over surrounding frames.
+          </p>
+        </div>
+      </div>
+      <div class="card" style="background:var(--accent-soft); border-color:var(--accent); margin-top:16px; text-align:center;">
+        <p style="color:#0b4f4a; font-size:16px;">
+          <strong>Idea:</strong> a GRU that learns to <strong>clean up the POS signal over time</strong> —
+          RGB + POS together is more robust and data-efficient than RGB alone.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3 · POS SIGNAL — all charts -->
+  <section class="slide">
+    <div class="content">
+      <span class="kicker">02 · The baseline</span>
+      <h2>POS: from skin colour to pulse — visually</h2>
+      <div class="grid cols-2">
+        <div>
+          <div class="chart-box">
+            <h3>1 · Mean RGB over time</h3>
+            <div class="sub">the trace CardioVision extracts from the skin ROI</div>
+            <svg viewBox="0 0 480 120" role="img" aria-label="mean RGB trace">
+              <path id="rgbR" fill="none" stroke="#ef4444" stroke-width="1.8"></path>
+              <path id="rgbG" fill="none" stroke="#22c55e" stroke-width="1.8"></path>
+              <path id="rgbB" fill="none" stroke="#3b82f6" stroke-width="1.8"></path>
+            </svg>
+          </div>
+          <div class="chart-box" style="margin-top:12px;">
+            <h3>3 · POS estimate vs band-pass</h3>
+            <div class="sub">peaks on the filtered signal → BPM</div>
+            <svg viewBox="0 0 480 130" role="img" aria-label="POS waveform">
+              <path id="waveNoisy" fill="none" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="4 3" opacity="0.6"></path>
+              <path id="waveClean" fill="none" stroke="#0f766e" stroke-width="2.2"></path>
+              <path id="wavePeaks" fill="none" stroke="#b45309" stroke-width="0"></path>
+            </svg>
+          </div>
+        </div>
+        <div>
+          <div class="chart-box">
+            <h3>2 · Chrominance signals S₁ · S₂</h3>
+            <div class="sub">colour differences that isolate the pulse</div>
+            <svg viewBox="0 0 480 120" role="img" aria-label="chrominance signals">
+              <path id="chrS1" fill="none" stroke="#f59e0b" stroke-width="1.8"></path>
+              <path id="chrS2" fill="none" stroke="#8b5cf6" stroke-width="1.8"></path>
+            </svg>
+            <div class="legend">
+              <span><i class="sw" style="background:#f59e0b"></i>S₁</span>
+              <span><i class="sw" style="background:#8b5cf6"></i>S₂</span>
+            </div>
+          </div>
+          <div class="chart-box" style="margin-top:12px;">
+            <h3>4 · Band-pass filter response</h3>
+            <div class="sub">only the cardiac band survives</div>
+            <svg viewBox="0 0 480 130" role="img" aria-label="band-pass frequency response">
+              <rect x="20" y="18" width="440" height="92" fill="none" stroke="#e2e8f0"/>
+              <rect id="passband" x="0" y="18" width="0" height="92" fill="#ccfbf1"/>
+              <path id="resp" fill="none" stroke="#0f766e" stroke-width="2.2"></path>
+              <line id="f0" x1="0" y1="18" x2="0" y2="110" stroke="#b45309" stroke-dasharray="3 3"></line>
+              <line id="f1" x1="0" y1="18" x2="0" y2="110" stroke="#b45309" stroke-dasharray="3 3"></line>
+              <text id="r1" x="0" y="124" font-size="10" fill="#b45309" font-family="sans-serif"></text>
+              <text id="r2" x="0" y="124" font-size="10" fill="#b45309" font-family="sans-serif"></text>
+              <text id="r3" x="0" y="124" font-size="10" fill="#b45309" font-family="sans-serif"></text>
+              <text x="20" y="14" font-size="10" fill="#5c6b7d" font-family="sans-serif">gain</text>
+              <text x="455" y="124" font-size="10" fill="#5c6b7d" font-family="sans-serif">frequency (Hz)</text>
+            </svg>
+          </div>
+        </div>
+      </div>
+      <p style="margin-top:14px; font-size:13px;" class="muted">
+        The POS waveform is retained as an interpretable feature and fallback baseline — not treated as ground truth.
+      </p>
+    </div>
+  </section>
+
+  <!-- 4 · HYPOTHESES -->
+  <section class="slide">
+    <div class="content">
+      <span class="kicker">04 · Hypotheses</span>
+      <h2>Four falsifiable claims — and how we judge them</h2>
+
+      <div class="grid cols-2" style="margin-bottom:14px;">
+        <div class="hyp"><span class="tag">H1</span><p>POS-GRU <strong>beats POS</strong> when motion or illumination changes.</p></div>
+        <div class="hyp"><span class="tag">H2</span><p>Feeding POS as input <strong>beats RGB-only</strong> GRU.</p></div>
+        <div class="hyp"><span class="tag">H3</span><p>On stable video, POS-GRU <strong>matches POS</strong> — no degradation.</p></div>
+        <div class="hyp"><span class="tag">H4</span><p>A compact GRU <strong>meets real-time</strong> on target hardware.</p></div>
+      </div>
+
+      <div class="grid cols-2">
+        <div class="chart-box">
+          <h3>Hypothetical outcome — BPM error</h3>
+          <div class="sub">lower is better · illustrative targets, not measured</div>
+          <svg viewBox="0 0 480 190" role="img" aria-label="bar chart BPM error">
+            <line x1="40" y1="160" x2="460" y2="160" stroke="#cbd5e1" stroke-width="1"/>
+            <line x1="40" y1="30" x2="40" y2="160" stroke="#cbd5e1" stroke-width="1"/>
+            <g id="bars"></g>
+            <g id="barLabels"></g>
+            <g id="barVals"></g>
+          </svg>
+        </div>
+        <div class="chart-box">
+          <h3>Hypothetical outcome — waveform correlation</h3>
+          <div class="sub">higher is better · with reference PPG/ECG</div>
+          <svg viewBox="0 0 480 190" role="img" aria-label="bar chart waveform correlation">
+            <line x1="40" y1="160" x2="460" y2="160" stroke="#cbd5e1" stroke-width="1"/>
+            <line x1="40" y1="30" x2="40" y2="160" stroke="#cbd5e1" stroke-width="1"/>
+            <g id="corrBars"></g>
+            <g id="corrLabels"></g>
+            <g id="corrVals"></g>
+          </svg>
+        </div>
+      </div>
+      <p style="margin-top:12px; font-size:13px;" class="muted">
+        Compare under identical splits, <strong>participant-disjoint</strong>; stratify by motion, illumination, skin tone, camera.
+      </p>
+    </div>
+  </section>
+
+  <!-- 6 · REFERENCE 1 : WANG 2017 (POS) -->
+  <section class="slide">
+    <div class="content">
+      <span class="kicker">05 · Reference in context</span>
+      <h2>Wang et al. 2017 — POS (our baseline)</h2>
+
+      <div class="grid cols-2">
+        <div class="card">
+          <h3>The paper</h3>
+          <p class="muted" style="font-size:14px;">
+            <strong>Algorithmic Principles of Remote PPG</strong>, IEEE Transactions on Biomedical Engineering, 2017.
+            Formalises Plane-Orthogonal-to-Skin (POS) as a chrominance method for rPPG: build a colour plane
+            orthogonal to skin tone in normalized RGB, project the skin trace onto it, and read out the pulse.
+          </p>
+          <div class="flow" style="margin-top:12px; justify-content:flex-start;">
+            <div class="box">RGB trace</div><div class="arrow">→</div>
+            <div class="box">orthogonal colour plane</div><div class="arrow">→</div>
+            <div class="box">pulse signal</div>
+          </div>
+        </div>
+        <div class="card" style="background:var(--accent-soft); border-color:var(--accent);">
+          <h3 style="color:#0b4f4a;">Why it matters to our hypothesis</h3>
+          <ul>
+            <li>POS is the interpretable <strong>baseline and fallback</strong> in all three inference modes</li>
+            <li>Its signal is our <strong>input feature</strong> — we preserve the physics, no new physiology</li>
+            <li>H3 assumes POS is reliable on stable video — this paper is the evidence we test against</li>
+            <li>Any POS-GRU gain is measured <strong>relative to this method</strong></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7 · REFERENCE 2 : RHYTHMNET 2020 (GRU) -->
+  <section class="slide">
+    <div class="content">
+      <span class="kicker">06 · Reference in context</span>
+      <h2>RhythmNet 2020 — GRU on rPPG (our precedent)</h2>
+
+      <div class="grid cols-2">
+        <div class="card">
+          <h3>The paper</h3>
+          <p class="muted" style="font-size:14px;">
+            <strong>RhythmNet: A Versatile Network for Remote Heart Rate Estimation from Videos</strong>,
+            IJCAI 2020 (Niu et al.). An end-to-end network that extracts a spatial–temporal representation from
+            face video, then uses a <strong>time-series network built on GRU</strong> to model the temporal
+            dependencies of the heart-rate signal.
+          </p>
+          <div class="flow" style="margin-top:12px; justify-content:flex-start;">
+            <div class="box">face video</div><div class="arrow">→</div>
+            <div class="box">spatio-temporal CNN</div><div class="arrow">→</div>
+            <div class="box accent">GRU</div><div class="arrow">→</div>
+            <div class="box">HR sequence</div>
+          </div>
+        </div>
+        <div class="card" style="background:var(--accent-soft); border-color:var(--accent);">
+          <h3 style="color:#0b4f4a;">Why it matters to our hypothesis</h3>
+          <ul>
+            <li>Direct evidence that a <strong>GRU over temporal rPPG features works</strong> — supports our H4 real-time &amp; GRU-over-CNN choice</li>
+            <li>Their GRU consumes <strong>learned CNN features</strong> — our H2 asks whether the <strong>POS physics</strong> can replace that learned front-end</li>
+            <li>If POS features match CNN features (H2), we get <strong>more data-efficient</strong> training</li>
+            <li>Same waveform→HR output structure: <strong>GRU refines, BPM stays downstream</strong></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 8 · REFERENCE 3 : DEEPPHYS 2018 (learned vs physics) -->
+  <section class="slide">
+    <div class="content">
+      <span class="kicker">07 · Reference in context</span>
+      <h2>DeepPhys 2018 — the case for a hybrid (our contrast)</h2>
+
+      <div class="grid cols-2">
+        <div class="card">
+          <h3>The paper</h3>
+          <p class="muted" style="font-size:14px;">
+            <strong>DeepPhys: Video-Based Physiological Measurement Using Convolutional Attention Networks</strong>,
+            WACV 2018 (Chen &amp; McDuff). An end-to-end two-branch CNN — a motion branch and an appearance branch
+            with attention — that learns rPPG directly from pixels and can beat classical methods.
+          </p>
+          <div class="flow" style="margin-top:12px; justify-content:flex-start;">
+            <div class="box">video frames</div><div class="arrow">→</div>
+            <div class="box">motion CNN + attention</div><div class="arrow">→</div>
+            <div class="box">pulse</div>
+          </div>
+        </div>
+        <div class="card" style="background:var(--accent-soft); border-color:var(--accent);">
+          <h3 style="color:#0b4f4a;">Why it matters to our hypothesis</h3>
+          <ul>
+            <li>Shows learned rPPG can <strong>outperform POS</strong> — but needs large datasets and compute</li>
+            <li>Motivates our middle path: keep POS as <strong>inductive bias</strong>, learn only a small temporal stage</li>
+            <li>Their CNN is <strong>spatial</strong>; our corruption is <strong>temporal</strong> — GRU targets the failure mode</li>
+            <li>Their black-box pulse trades interpretability — we keep <strong>BPM estimation downstream</strong></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 9 · NEXT STEPS -->
+  <section class="slide">
+    <div class="content">
+      <span class="kicker">08 · Next steps</span>
+      <h2>From proposal to proof</h2>
+
+      <div class="grid cols-3" style="margin-bottom:18px;">
+        <div class="stage"><span class="n">1</span><div><div class="t">Reproduce POS</div><div class="d">public rPPG dataset · record preprocessing</div></div></div>
+        <div class="stage"><span class="n">2</span><div><div class="t">Train smallest GRU</div><div class="d">compare vs POS &amp; RGB-only, identical splits</div></div></div>
+        <div class="stage"><span class="n">3</span><div><div class="t">Keep hybrid if…</div><div class="d">consistent gain · no extra failures</div></div></div>
+      </div>
+
+      <div class="chart-box">
+        <h3>Where the proposal stands</h3>
+        <div class="flow" style="justify-content:flex-start;">
+          <div class="box">POS baseline</div><div class="arrow">→</div>
+          <div class="box accent">POS-GRU</div><div class="arrow">→</div>
+          <div class="box" style="opacity:.5;">adopt only if H1–H4 hold</div>
+        </div>
+        <p class="muted" style="font-size:12px; margin-top:10px;">
+          Context: Wang et al. 2017 (POS) · RhythmNet 2020 (GRU) · DeepPhys 2018 (learned rPPG).
+        </p>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<div class="controls">
+  <button class="btn" id="prev">← Prev</button>
+  <div class="dots" id="dots"></div>
+  <button class="btn" id="next">Next →</button>
+  <span class="counter" id="counter">1 / 6</span>
+</div>
+
+<script>
+(function () {
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const dotsWrap = document.getElementById('dots');
+  const counter = document.getElementById('counter');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+  let idx = 0;
+
+  slides.forEach(function (_, i) {
+    const b = document.createElement('button');
+    b.setAttribute('aria-label', 'Go to slide ' + (i + 1));
+    b.addEventListener('click', function () { go(i); });
+    dotsWrap.appendChild(b);
+  });
+  const dots = Array.from(dotsWrap.querySelectorAll('button'));
+
+  function go(i) {
+    idx = Math.max(0, Math.min(slides.length - 1, i));
+    slides.forEach(function (s, k) { s.classList.toggle('active', k === idx); });
+    dots.forEach(function (d, k) { d.classList.toggle('on', k === idx); });
+    counter.textContent = (idx + 1) + ' / ' + slides.length;
+  }
+
+  prevBtn.addEventListener('click', function () { go(idx - 1); });
+  nextBtn.addEventListener('click', function () { go(idx + 1); });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); go(idx + 1); }
+    else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); go(idx - 1); }
+    else if (e.key === 'Home') { go(0); }
+    else if (e.key === 'End') { go(slides.length - 1); }
+  });
+
+  /* ---------- charts ---------- */
+
+  function linePath(n, w, amp, noise, freq, phase, bias) {
+    let d = [];
+    for (let i = 0; i < n; i++) {
+      const t = i / (n - 1);
+      const x = 20 + t * (w - 40);
+      let v = Math.sin(2 * Math.PI * freq * t + phase) * amp + (bias || 0);
+      v += (Math.random() - 0.5) * noise;
+      d.push(x + ',' + v.toFixed(1));
+    }
+    return 'M' + d.join(' L');
+  }
+
+  // title waveform (720x200), mid y=100
+  (function () {
+    const n = 360, mid = 100;
+    function path(amp, noise, freq) {
+      let d = [];
+      for (let i = 0; i < n; i++) {
+        const t = i / (n - 1);
+        const x = 20 + t * 680;
+        let v = Math.sin(2 * Math.PI * freq * t) * amp;
+        v += (Math.random() - 0.5) * noise;
+        d.push(x + ',' + (mid - v));
+      }
+      return 'M' + d.join(' L');
+    }
+    document.getElementById('titleNoisy').setAttribute('d', path(42, 30, 2.2));
+    document.getElementById('titleClean').setAttribute('d', path(42, 7, 2.2));
+  })();
+
+  // RGB trace (480x120) — 3 channels around y=60
+  (function () {
+    const base = [
+      { id: 'rgbR', phase: 0.0, amp: 6, bias: 14, noise: 4, color: '#ef4444' },
+      { id: 'rgbG', phase: 0.9, amp: 12, bias: -6, noise: 6, color: '#22c55e' },
+      { id: 'rgbB', phase: 1.8, amp: 7, bias: -22, noise: 4, color: '#3b82f6' }
+    ];
+    base.forEach(function (s) {
+      document.getElementById(s.id).setAttribute('d', linePath(240, 480, s.amp, s.noise, 2.2, s.phase, 60 + s.bias));
+    });
+  })();
+
+  // chrominance S1 S2 (480x120)
+  (function () {
+    document.getElementById('chrS1').setAttribute('d', linePath(240, 480, 16, 4, 2.2, 0.3, 60));
+    document.getElementById('chrS2').setAttribute('d', linePath(240, 480, 12, 6, 2.2, 1.2, 60));
+  })();
+
+  // POS waveform (480x130) mid y=65
+  (function () {
+    const n = 260, mid = 65;
+    function path(amp, noise, freq, phase) {
+      let d = [];
+      for (let i = 0; i < n; i++) {
+        const t = i / (n - 1);
+        const x = 20 + t * 440;
+        let v = Math.sin(2 * Math.PI * freq * t + phase) * amp;
+        v += (Math.random() - 0.5) * noise;
+        d.push(x + ',' + (mid - v));
+      }
+      return 'M' + d.join(' L');
+    }
+    document.getElementById('waveNoisy').setAttribute('d', path(26, 22, 2.0, 0.4));
+    document.getElementById('waveClean').setAttribute('d', path(26, 5, 2.0, 0.4));
+    const pk = document.getElementById('wavePeaks');
+    const d = [];
+    for (let k = 0; k < 6; k++) {
+      const t = (k + 0.25) / 6;
+      const x = 20 + t * 440;
+      const y = mid - 26;
+      d.push('M' + x + ',' + (y - 6) + ' L' + (x + 5) + ',' + y + ' L' + x + ',' + (y + 6) + ' Z');
+    }
+    pk.setAttribute('d', d.join(' '));
+  })();
+
+  // band-pass frequency response (480x130)
+  (function () {
+    const x0 = 30, x1 = 460, fmin = 0, fmax = 5;
+    const lo = 0.7, hi = 4.0;
+    const px = function (f) { return x0 + (f - fmin) / (fmax - fmin) * (x1 - x0); };
+    // passband shading
+    const pb = document.getElementById('passband');
+    pb.setAttribute('x', px(lo)); pb.setAttribute('width', px(hi) - px(lo));
+    // response curve: band-pass with transition bands
+    let d = [];
+    const pts = [];
+    for (let i = 0; i <= 200; i++) {
+      const f = fmin + i / 200 * (fmax - fmin);
+      const u = (f - lo) / (hi - lo);
+      let g;
+      if (u <= 0) g = Math.exp(3 * u);            // rising edge
+      else if (u >= 1) g = Math.exp(-3 * (u - 1)); // falling edge
+      else g = 1;                                  // passband
+      pts.push([px(f), 105 - g * 80]);
+    }
+    document.getElementById('resp').setAttribute('d', 'M' + pts.map(function (p) { return p[0] + ',' + p[1]; }).join(' L'));
+    // cutoff lines
+    document.getElementById('f0').setAttribute('x1', px(lo)); document.getElementById('f0').setAttribute('x2', px(lo));
+    document.getElementById('f1').setAttribute('x1', px(hi)); document.getElementById('f1').setAttribute('x2', px(hi));
+    document.getElementById('r1').setAttribute('x', px(lo)); document.getElementById('r1').setAttribute('text-anchor', 'middle'); document.getElementById('r1').textContent = '0.7';
+    document.getElementById('r2').setAttribute('x', px(hi)); document.getElementById('r2').setAttribute('text-anchor', 'middle'); document.getElementById('r2').textContent = '4.0 Hz';
+    document.getElementById('r3').setAttribute('x', px((lo + hi) / 2)); document.getElementById('r3').setAttribute('text-anchor', 'middle'); document.getElementById('r3').textContent = '≈ 42–240 BPM';
+  })();
+
+  // bar charts (480x190), y 30..160
+  (function () {
+    function make(data, maxV, barsId, labelsId, valsId, fmt) {
+      const x0 = 40, x1 = 460, y0 = 160, y1 = 30;
+      const gap = 26, bw = 86;
+      const totalW = data.length * bw + (data.length - 1) * gap;
+      let start = x0 + (x1 - x0 - totalW) / 2;
+      let bars = '', labels = '', vals = '';
+      data.forEach(function (d, i) {
+        const bx = start + i * (bw + gap);
+        const bh = (d.value / maxV) * (y0 - y1);
+        const by = y0 - bh;
+        bars += '<rect x="' + bx + '" y="' + by + '" width="' + bw + '" height="' + bh + '" rx="4" fill="' + d.color + '"/>';
+        labels += '<text x="' + (bx + bw / 2) + '" y="176" text-anchor="middle" font-size="11" fill="#5c6b7d">' + d.label + '</text>';
+        vals += '<text x="' + (bx + bw / 2) + '" y="' + (by - 6) + '" text-anchor="middle" font-size="11" font-weight="600">' + fmt(d.value) + '</text>';
+      });
+      document.getElementById(barsId).innerHTML = bars;
+      document.getElementById(labelsId).innerHTML = labels;
+      document.getElementById(valsId).innerHTML = vals;
+    }
+    make(
+      [
+        { label: 'POS', value: 4.8, color: '#94a3b8' },
+        { label: 'GRU-only', value: 3.9, color: '#0ea5e9' },
+        { label: 'POS-GRU', value: 2.4, color: '#0f766e' }
+      ], 6, 'bars', 'barLabels', 'barVals', function (v) { return v.toFixed(1); }
+    );
+    make(
+      [
+        { label: 'POS', value: 0.82, color: '#94a3b8' },
+        { label: 'GRU-only', value: 0.86, color: '#0ea5e9' },
+        { label: 'POS-GRU', value: 0.93, color: '#0f766e' }
+      ], 1, 'corrBars', 'corrLabels', 'corrVals', function (v) { return v.toFixed(2); }
+    );
+  })();
+
+  go(0);
+})();
+</script>
+
+</body>
+</html>
