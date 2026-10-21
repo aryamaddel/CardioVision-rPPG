@@ -5,3 +5,5 @@ face_landmarker.task
 output/
 vid.avi
 ground_truth.txt
+tmp/
+.rppg_cache/
