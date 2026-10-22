@@ -211,6 +211,7 @@ svg text{font-family:"Segoe UI",Arial,sans-serif}
     <a href="#data">The data</a>
     <a href="#results">Results</a>
     <a href="#scaleup">Bigger test</a>
+    <a href="#mlp">Trained model</a>
     <a href="#why">GPU vs CPU</a>
     <a href="#reproduce">Reproduce ↗</a>
   </nav>
@@ -324,10 +325,10 @@ svg text{font-family:"Segoe UI",Arial,sans-serif}
       </article>
     </div>
 
-    <div class="subhead">WAS ANY MODEL TRAINED? NO — HERE'S WHAT ACTUALLY HAPPENED</div>
-    <div class="route-grid" style="margin-top:24px">
+    <div class="subhead">IS ANYTHING TRAINED? RULE-BASED CORE = NO; A SMALL NEURAL VARIANT = YES</div>
+    <div class="route-grid" style="margin-top:24px;grid-template-columns:repeat(3,1fr)">
       <div class="tab-card" style="opacity:1">
-        <div class="card-heading"><div><span class="method-label" style="color:var(--green)"><i></i> NO TRAINING</span><h3>The detector learns nothing</h3></div></div>
+        <div class="card-heading"><div><span class="method-label" style="color:var(--green)"><i></i> NO TRAINING</span><h3>The main detector learns nothing</h3></div></div>
         <p>The whole detector is a fixed formula set: the POS colour-to-pulse math (chosen button, Wang et al. 2017) plus
         simple thresholds. Nothing is fitted — which also means overfitting is impossible here.</p>
       </div>
@@ -335,6 +336,11 @@ svg text{font-family:"Segoe UI",Arial,sans-serif}
         <div class="card-heading"><div><span class="method-label" style="color:var(--orange)"><i></i> PRETRAINED</span><h3>Face models used as-is</h3></div></div>
         <p>Face tracking (MediaPipe / SCRFD + mesh) and the AI-swap generator (inswapper_128 + ArcFace) come pretrained
         from their authors. We only configured them.</p>
+      </div>
+      <div class="tab-card" style="opacity:1">
+        <div class="card-heading"><div><span class="method-label" style="color:var(--green)"><i></i> TRAINED · INT8 MLP</span><h3>Small neural variant (spin-off)</h3></div></div>
+        <p>A spin-off detector <b>is</b> trained: same POS pulse as input, but a learned 36-feature → INT8 MLP decides REAL vs AI.
+        See <a href="#mlp">Trained model</a>. The threshold rules above remain the no-training core.</p>
       </div>
     </div>
 
@@ -473,16 +479,69 @@ svg text{font-family:"Segoe UI",Arial,sans-serif}
     </div>
   </section>
 
+  <!-- ============ 05 TRAINED MODEL ============ -->
+  <section id="mlp">
+    <div class="section-heading">
+      <div><span class="eyebrow">05 / A TRAINED DETECTOR</span><h2>The same pulse, learned instead of ruled.</h2></div>
+      <span class="status">INT8 · runs anywhere · 4 KB</span>
+    </div>
+
+    <div class="tldr" style="margin:26px 0 0">
+      <span class="tldr-num">276</span>
+      <p><b>training windows</b> — 138 real (44 UBFC subjects) vs 138 AI, cut into exactly equal 50/50 folds.
+        Every 12 s window becomes 36 numbers: pulse <i>strength</i> per face zone, zone-to-zone <i>teamwork</i>,
+        heart rate, plus 24 spectral shape bins. A tiny neural net (36 → 24 → 2) learns to separate the classes,
+        then ships quantized to <b>INT8</b> — the whole model is <b>4 KB</b>, no GPU needed at inference.</p>
+    </div>
+
+    <div class="statband">
+      <div class="stat g"><strong>0.835</strong><span>window accuracy ± 0.072 (5-fold CV)</span></div>
+      <div class="stat g"><strong>0.886</strong><span>whole-video (identity) accuracy</span></div>
+      <div class="stat"><strong>0.921</strong><span>AUC — real score higher than fake 92% of the time</span></div>
+      <div class="stat"><strong>26</strong><span>identities pooled per fold — no face repeats across train/test</span></div>
+    </div>
+
+    <div class="table-wrap" style="margin-top:30px">
+      <table>
+        <caption>TABLE 3 — THE 5 CV FOLDS (NO IDENTITY SHARED BETWEEN TRAIN AND TEST)</caption>
+        <thead><tr><th>fold</th><th class="num">test windows</th><th class="num">INT8 accuracy</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td class="num">41</td><td class="num">0.93</td></tr>
+          <tr><td>2</td><td class="num">53</td><td class="num">0.85</td></tr>
+          <tr><td>3</td><td class="num">62</td><td class="num">0.73</td></tr>
+          <tr><td>4</td><td class="num">65</td><td class="num">0.78</td></tr>
+          <tr><td>5</td><td class="num">55</td><td class="num">0.89</td></tr>
+          <tr class="sep"><td><b>mean</b></td><td class="num dim">276 windows total</td><td class="num"><b>0.835 ± 0.072</b></td></tr>
+        </tbody>
+      </table>
+      <p class="tnote">The AI side is deliberately harder than the face-swap fakes above: <b>24 fully generated clips</b>
+        — diffusion talking faces (EMO / EMO2, with AI-generated source portraits) plus AI-themed stock footage
+        (laser face-scan shots, a brush-painted face, head turns). Provenance for every clip is listed in
+        <code>tmp/ai_pool/manifest.json</code>.</p>
+    </div>
+
+    <p class="tnote"><b>Why INT8 only.</b> During validation the INT8 model matched the full-precision reference
+      (0.835 vs 0.823 window accuracy, same identity accuracy and AUC — quantization noise even trimmed the fold spread),
+      so the ladder was reduced to INT8: one artifact, 4 KB, CPU-cheap, no FP16/FP32 export to maintain.
+      The weights live in the <a href="https://github.com/ratnajeet00/CardioVision-rPPG/releases/tag/rppg-mlp-int8-v1" target="_blank" rel="noreferrer">release ↗</a>.</p>
+
+    <div class="verdict">
+      <strong>Complement, not replacement.</strong> The threshold rules (section 01) run with zero training and won't
+      overfit by construction; the MLP learns the same physiology on a much harder AI pool and can weigh borderline
+      cases. They share the identical pulse-extraction front end, so both run from one pass over the video.
+    </div>
+  </section>
+
   <!-- ============ 04 GPU VS CPU ============ -->
   <section id="why">
     <div class="section-heading">
-      <div><span class="eyebrow">05 / GPU VS CPU</span><h2>Two face trackers, same brain.</h2></div>
+      <div><span class="eyebrow">06 / GPU VS CPU</span><h2>Two face trackers, same brain.</h2></div>
       <span class="status">Both: 12/12 correct</span>
     </div>
 
     <div class="table-wrap" style="margin-top:26px">
       <table>
-        <caption>TABLE 3 — WHICH ONE WINS WHAT</caption>
+        <caption>TABLE 4 — WHICH ONE WINS WHAT</caption>
         <thead><tr><th>measure</th><th class="num">GPU (RTX 5070)</th><th class="num">CPU (MediaPipe)</th><th>winner</th></tr></thead>
         <tbody>
           <tr><td>Clips classified correctly</td><td class="num">12 / 12</td><td class="num">12 / 12</td><td><span class="dim">tie</span></td></tr>
@@ -506,10 +565,10 @@ svg text{font-family:"Segoe UI",Arial,sans-serif}
     </div>
   </section>
 
-  <!-- ============ 05 REPRODUCE ============ -->
+  <!-- ============ 06 REPRODUCE ============ -->
   <section id="reproduce">
     <div class="section-heading">
-      <div><span class="eyebrow">06 / REPRODUCE</span><h2>Run it yourself.</h2></div>
+      <div><span class="eyebrow">07 / REPRODUCE</span><h2>Run it yourself.</h2></div>
       <span class="status">All numbers come from committed run logs</span>
     </div>
 
@@ -517,10 +576,13 @@ svg text{font-family:"Segoe UI",Arial,sans-serif}
 uv run python tools/fetch_ubfc_faces.py          # download the 316 MB benchmark (resumable)
 uv run python tools/build_ubfc_faces.py          # build 42 subjects → UBFC_FACES/
 uv run python deepfake_detect.py --extractor mediapipe --duration 20   # the 54-clip test
-uv run python deepfake_detect.py --frames 360    # the quick 12-clip comparison</code></pre>
+uv run python deepfake_detect.py --frames 360    # the quick 12-clip comparison
+uv run python tools/train_rppg_detector.py       # train the INT8 rPPG MLP (Trained model)</code></pre>
     <p class="note"><b>Model weights (716 MB)</b>: <a href="https://github.com/ratnajeet00/CardioVision-rPPG/releases/tag/model-weights-v1">GitHub release ↗</a> —
       put <code>inswapper_128.onnx</code> and <code>mesh.onnx</code> in <code>models/</code>, plus
-      <code>det_10g.onnx</code> + <code>w600k_r50.onnx</code> in <code>models/buffalo_l/</code>.</p>
+      <code>det_10g.onnx</code> + <code>w600k_r50.onnx</code> in <code>models/buffalo_l/</code>.
+      <b>INT8 detector weights (4 KB)</b>: <a href="https://github.com/ratnajeet00/CardioVision-rPPG/releases/tag/rppg-mlp-int8-v1">GitHub release ↗</a> →
+      <code>models/rppg_mlp/int8_model.npz</code>.</p>
     <p class="note">Results are written to <code>output/deepfake_ppg_results_*_{12s|20s}.json</code> + matching demo PNGs; GPU telemetry in <code>output/gpu_*.csv</code>.</p>
 
     <div class="research-note">
@@ -536,6 +598,7 @@ uv run python deepfake_detect.py --frames 360    # the quick 12-clip comparison<
     <div class="source-links">
       <a href="https://github.com/ratnajeet00/CardioVision-rPPG" target="_blank" rel="noreferrer">Repository ↗</a>
       <a href="https://github.com/ratnajeet00/CardioVision-rPPG/releases/tag/model-weights-v1" target="_blank" rel="noreferrer">Model weights ↗</a>
+      <a href="https://github.com/ratnajeet00/CardioVision-rPPG/releases/tag/rppg-mlp-int8-v1" target="_blank" rel="noreferrer">INT8 detector weights ↗</a>
       <a href="https://paperswithcode.com/dataset/ubfc-rppg" target="_blank" rel="noreferrer">UBFC dataset ↗</a>
       <a href="https://github.com/deepinsight/insightface" target="_blank" rel="noreferrer">InsightFace inswapper ↗</a>
     </div>
