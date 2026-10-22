@@ -20,14 +20,28 @@ we generate from them:
      temporally incoherent texture of generated faces)
   - "swap":  donor face warped onto the target via landmarks + Poisson
      blending (classic naive face-swap deepfake)
+  - "nnswap": inswapper_128 neural identity swap generated on the GPU
+    (modern high-quality deepfake: SCRFD align -> arcface identity ->
+    generator -> feathered paste-back; see make_deepfakes.py)
+
+Extraction backends (gpu_core.py):
+  - gpu:       SCRFD + face-mesh onnx on onnxruntime-gpu CUDA, MediaPipe-
+    compatible landmarks (~6-9 px agreement + One-Euro temporal smoothing;
+    MediaPipe's Windows wheel ships with GPU disabled, so this is the GPU
+    path)
+  - mediapipe: original CPU pipeline (reference / fallback)
 
 Usage:
-  python deepfake_detect.py                 # full run (360 frames)
+  python deepfake_detect.py                 # full run (360 frames, GPU auto)
+  python deepfake_detect.py --extractor mediapipe   # CPU reference run
   python deepfake_detect.py --frames 200    # shorter run
   python deepfake_detect.py --tau-spr 4 --tau-coh 0.35
+  python deepfake_detect.py --ai-glob "tmp/ai/*.mp4"
 """
 import argparse
 import json
+import queue
+import threading
 from collections import deque
 from pathlib import Path
 
@@ -39,6 +53,8 @@ from mediapipe.tasks.python import vision as mp_vision
 from scipy.signal import welch
 
 from rppg import _ensure_model, pos_algorithm, compute_bpm, BP_LO, BP_HI
+from gpu_core import (GPURegionExtractor, GpuMonitor, BaseRegionExtractor,
+                      backend_report, cuda_available, MODELS, BUFFALO)
 
 ROOT = Path(__file__).resolve().parent
 MODEL = str(ROOT / "face_landmarker.task")
@@ -65,10 +81,11 @@ BPM_RANGE = (45.0, 140.0)
 
 
 # ---------------------------------------------------------------- extraction
-class RegionExtractor:
-    """MediaPipe face landmarker -> mean RGB for small ROIs + full face."""
+class RegionExtractor(BaseRegionExtractor):
+    """MediaPipe face landmarker (CPU) -> mean RGB for small ROIs + full face."""
 
     def __init__(self, model_path: str = MODEL):
+        super().__init__(regions=REGIONS, roi_r=ROI_R)
         _ensure_model(model_path)
         opts = mp_vision.FaceLandmarkerOptions(
             base_options=mp_python.BaseOptions(model_asset_path=model_path),
@@ -93,58 +110,77 @@ class RegionExtractor:
         return np.array([[lk.x * w, lk.y * h] for lk in res.face_landmarks[0]],
                         dtype=np.float32)
 
-    @staticmethod
-    def _mean_bgr(frame, mask):
-        px = frame[mask > 0]
-        if len(px) < 10:
-            return (np.nan, np.nan, np.nan)
-        return (float(px[:, 2].mean()), float(px[:, 1].mean()), float(px[:, 0].mean()))  # R,G,B
 
-    def region_rgb(self, frame, lm):
-        from rppg import EXCLUDE
-        h, w = frame.shape[:2]
-        lm_i = lm.astype(np.int32)
-        hull = cv2.convexHull(lm_i)
-        scale = np.sqrt(max(cv2.contourArea(hull), 1.0))
-        out = {}
-        mask = np.zeros((h, w), np.uint8)
-        cv2.fillPoly(mask, [hull], 255)
-        for idx in EXCLUDE:
-            cv2.fillPoly(mask, [lm_i[idx].reshape(1, 1, 2)], 0)
-        out["full"] = self._mean_bgr(frame, mask)
-        ax = max(4, int(ROI_R * scale))
-        for name, idxs in REGIONS.items():
-            c = tuple(lm[idxs].mean(axis=0).astype(int))
-            m = np.zeros((h, w), np.uint8)
-            cv2.ellipse(m, c, (ax, ax), 0, 0, 360, 255, -1)
-            out[name] = self._mean_bgr(frame, m)
-        return out
+def extract_traces(video: Path, n_frames: int, fps_hint: float,
+                   tag: str = "mediapipe", make_extractor=None):
+    """Return dict region -> (N,3) RGB arrays + fps. NaNs interpolated.
 
-
-def extract_traces(video: Path, n_frames: int, fps_hint: float):
-    """Return dict region -> (N,3) RGB arrays + fps. NaNs interpolated."""
-    key = f"traces_{video.stem}_{video.stat().st_size}_{n_frames}"
+    `tag` keys the cache per extractor backend (GPU landmarks track MediaPipe
+    to ~5 px but are not bit-identical, so caches must not mix).
+    """
+    key = f"traces_{video.stem}_{video.stat().st_size}_{n_frames}_{tag}"
     cache_file = CACHE / f"{key}.npz"
     if cache_file.exists():
         z = np.load(cache_file)
         return {k: z[k] for k in z.files if k != "fps"}, float(z["fps"])
 
-    ex = RegionExtractor()
+    ex = (make_extractor or (lambda: RegionExtractor()))()
     cap = cv2.VideoCapture(str(video))
     if not cap.isOpened():
         raise RuntimeError(f"cannot open {video}")
     fps = cap.get(cv2.CAP_PROP_FPS) or fps_hint
     rows = {k: [] for k in ["full", *REGIONS]}
     t0 = cv2.getTickCount()
-    for i in range(n_frames):
-        ok, frame = cap.read()
-        if not ok:
+
+    # 3-stage pipeline: decode (CPU) -> landmarks (GPU/CPU) -> ROI means (CPU),
+    # so the landmark backend never waits on video decode (keeps GPU fed).
+    q1: queue.Queue = queue.Queue(maxsize=8)
+    q2: queue.Queue = queue.Queue(maxsize=8)
+    err: list = []
+
+    def _decode():
+        try:
+            for i in range(n_frames):
+                ok, frame = cap.read()
+                if not ok:
+                    break
+                q1.put((i, frame))
+            q1.put(None)
+        except BaseException as e:  # noqa: BLE001
+            err.append(e)
+            q1.put(None)
+            q2.put(None)
+
+    def _infer():
+        try:
+            while True:
+                item = q1.get()
+                if item is None:
+                    q2.put(None)
+                    return
+                i, frame = item
+                lm = ex.landmarks(frame, int(i * 1000.0 / fps))
+                q2.put((frame, lm))
+        except BaseException as e:  # noqa: BLE001
+            err.append(e)
+            q2.put(None)
+
+    th_d = threading.Thread(target=_decode, daemon=True)
+    th_i = threading.Thread(target=_infer, daemon=True)
+    th_d.start()
+    th_i.start()
+    while True:
+        item = q2.get()
+        if item is None:
             break
-        ts = int(i * 1000.0 / fps)
-        lm = ex.landmarks(frame, ts)
+        frame, lm = item
         rr = ex.region_rgb(frame, lm) if lm is not None else None
         for k in rows:
             rows[k].append(rr[k] if rr else (np.nan,) * 3)
+    th_d.join()
+    th_i.join()
+    if err:
+        raise err[0]
     cap.release()
     ex.close()
     n = len(rows["full"])
@@ -285,6 +321,8 @@ def main():
     ap.add_argument("--tau-coh", type=float, default=DEFAULT_TAU_COH)
     ap.add_argument("--ai-glob", type=str, default=None,
                     help="extra AI-generated clips to evaluate, e.g. 'tmp/ai/*.mp4'")
+    ap.add_argument("--extractor", choices=["auto", "gpu", "mediapipe"], default="auto",
+                    help="landmark backend: GPU onnx (auto/CUDA) or MediaPipe CPU")
     args = ap.parse_args()
     TAU_SPR_DB, TAU_COH = args.tau_spr, args.tau_coh
 
@@ -292,13 +330,37 @@ def main():
     OUT.mkdir(exist_ok=True)
     videos = {s: ROOT / "Dataset" / f"subject_{s}" / "vid.avi" for s in (1, 2)}
 
+    gpu_ok = (cuda_available() and (MODELS / "mesh.onnx").exists()
+              and (BUFFALO / "det_10g.onnx").exists())
+    if args.extractor == "gpu" or (args.extractor == "auto" and gpu_ok):
+        kind = "gpu"
+        make_ex = lambda: GPURegionExtractor(regions=REGIONS, roi_r=ROI_R)  # noqa: E731
+    else:
+        kind = "mediapipe"
+        make_ex = lambda: RegionExtractor()  # noqa: E731
+    print(f"== extractor: {kind} ==")
+
     print("== generating fake clips (if missing) ==")
+    gen_mon = GpuMonitor(interval=0.4).start(label="generate_fakes")
     fakes = {
         "fake_smooth_s1": make_smooth_fake(videos[1], TMP / f"fake_smooth_s1_{args.frames}.avi", args.frames),
         "fake_smooth_s2": make_smooth_fake(videos[2], TMP / f"fake_smooth_s2_{args.frames}.avi", args.frames),
         "fake_swap_s2toS1": make_swap_fake(videos[1], videos[2], TMP / f"fake_swap_s2toS1_{args.frames}.avi", args.frames),
         "fake_swap_s1toS2": make_swap_fake(videos[2], videos[1], TMP / f"fake_swap_s1toS2_{args.frames}.avi", args.frames),
     }
+    try:
+        from make_deepfakes import make_nnswap_fake
+        # generation always prefers CUDA (independent of the extraction backend)
+        fakes["fake_nnswap_s2toS1"] = make_nnswap_fake(
+            videos[1], videos[2], TMP / f"fake_nnswap_s2toS1_{args.frames}.avi",
+            args.frames, gpu=True)
+        fakes["fake_nnswap_s1toS2"] = make_nnswap_fake(
+            videos[2], videos[1], TMP / f"fake_nnswap_s1toS2_{args.frames}.avi",
+            args.frames, gpu=True)
+    except Exception as exc:  # noqa: BLE001 - classic fakes still testable
+        print(f"  [warn] neural swap clips skipped: {exc}")
+    gen_stats = gen_mon.stop()
+    gen_mon.save_csv(OUT / "gpu_generation.csv")
 
     clips = [
         ("real_s1", videos[1], 1), ("real_s2", videos[2], 2),
@@ -310,9 +372,14 @@ def main():
             clips.append((f"ai_{Path(p).stem}", Path(p), None))
 
     print("== extracting rPPG traces ==")
+    ex_mon = GpuMonitor(interval=0.5).start(label=f"extraction[{kind}]")
+    # cache tag: gpu landmarks are One-Euro-smoothed with the absolute-crop
+    # joint fit (v3; earlier caches predate the refit and must not mix)
+    tag = f"{kind}_1e3" if kind == "gpu" else kind
     results = {}
     for name, path, subj in clips:
-        traces, fps = extract_traces(path, args.frames, 30.0)
+        traces, fps = extract_traces(path, args.frames, 30.0, tag=tag,
+                                     make_extractor=make_ex)
         gt = None
         if subj is not None:
             gt_ppg, gt_hr = load_gt(ROOT / "Dataset" / f"subject_{subj}")
@@ -321,6 +388,8 @@ def main():
             gt_ppg = gt_hr = None
         results[name] = clip_features(traces, fps, gt)
         results[name]["fps"] = fps
+    ext_stats = ex_mon.stop()
+    ex_mon.save_csv(OUT / f"gpu_extraction_{kind}.csv")
 
     print("\n== results ==")
     hdr = f"{'clip':<18} {'SPR(dB)':>8} {'coher.':>7} {'BPM':>7} {'GT BPM':>7} {'|r| GT':>7}  verdict"
@@ -334,9 +403,17 @@ def main():
         rgt = "--" if r["corr_gt"] is None else f"{r['corr_gt']:.2f}"
         print(f"{name:<18} {r['spr_db']:>8.2f} {r['coherence']:>7.3f} {r['bpm']:>7.1f} {gt_hr_txt:>7} {rgt:>7}  {r['verdict']}")
 
-    (OUT / "deepfake_ppg_results.json").write_text(json.dumps(
-        {k: {kk: vv for kk, vv in v.items() if kk not in ("pulse", "freqs", "psd")}
-         for k, v in results.items()}, indent=2))
+    payload = {k: {kk: vv for kk, vv in v.items() if kk not in ("pulse", "freqs", "psd")}
+               for k, v in results.items()}
+    payload["_meta"] = {
+        "extractor": kind,
+        "gpu_backends": backend_report(),
+        "gpu_stages": [gen_stats, ext_stats],
+        "frames": args.frames,
+        "tau_spr_db": TAU_SPR_DB,
+        "tau_coh": TAU_COH,
+    }
+    (OUT / "deepfake_ppg_results.json").write_text(json.dumps(payload, indent=2))
 
     # ---- figure
     import matplotlib
@@ -352,7 +429,10 @@ def main():
     ax[0, 0].set_title("Real subject_1: rPPG pulse vs ground truth")
     ax[0, 0].legend(); ax[0, 0].set_xlabel("s")
 
-    for name, style in [("real_s1", "-"), ("fake_smooth_s1", "--"), ("fake_swap_s2toS1", ":")]:
+    for name, style in [("real_s1", "-"), ("fake_smooth_s1", "--"),
+                        ("fake_swap_s2toS1", ":"), ("fake_nnswap_s2toS1", "-.")]:
+        if name not in results:
+            continue
         r = results[name]
         b = (r["freqs"] >= BP_LO) & (r["freqs"] <= BP_HI)
         ax[0, 1].plot(r["freqs"][b] * 60, zscore(r["psd"][b]), style, label=name)
@@ -381,6 +461,7 @@ def main():
     fig.tight_layout()
     fig.savefig(OUT / "deepfake_ppg_demo.png", dpi=110)
     print(f"\nwrote {OUT / 'deepfake_ppg_results.json'} and {OUT / 'deepfake_ppg_demo.png'}")
+    print(f"extractor={kind} | onnx backends: {backend_report()}")
 
 
 if __name__ == "__main__":

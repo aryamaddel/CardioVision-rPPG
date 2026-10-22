@@ -7,3 +7,5 @@ vid.avi
 ground_truth.txt
 tmp/
 .rppg_cache/
+models/
+tmp_testframe.png

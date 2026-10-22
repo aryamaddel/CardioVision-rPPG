@@ -10,6 +10,8 @@ python main.py --source 1 --window 8        # camera 1, 8s window
 
 Displays face ROI with BPM overlay.
 
+**Results website:** open `docs/index.html` in a browser — interactive tables, charts, and the GPU/landmark calibration story.
+
 ---
 
 # Deepfake detection from rPPG (`deepfake_detect.py`)
@@ -55,8 +57,15 @@ the 2 UBFC-rPPG subjects in `Dataset/` (real videos + contact-PPG ground truth):
      generated texture).
    - `fake_swap_*` — donor face aligned by landmarks (eyes/nose/mouth) and
      Poisson-blended onto the target — a classic naive face-swap deepfake.
-2. **Traces**: MediaPipe landmarks → mean RGB per region (forehead, both
-   cheeks, full face) → POS pulse per region (`rppg.py` reused as-is).
+   - `fake_nnswap_*` — **modern neural identity swap** generated on the GPU with
+     InsightFace `inswapper_128` (SCRFD detect → ArcFace 512-D identity → 554 MB
+     generator → feathered paste-back; `make_deepfakes.py`). This is the current
+     state of the art — visually near-flawless, and the primary adversarial test.
+2. **Traces**: landmarks → mean RGB per region (forehead, both cheeks, full
+   face) → POS pulse per region (`rppg.py` reused as-is). Two backends:
+   - `--extractor mediapipe` — original CPU pipeline (reference).
+   - `--extractor gpu` (default `auto`) — SCRFD + 478-pt face-mesh ONNX on
+     `onnxruntime-gpu` CUDA (`gpu_core.py`), One-Euro-smoothed landmarks.
 3. **Features** per clip:
    - **SPR (dB)** — Welch PSD peak-to-median ratio inside the HR band
      (is there a dominant periodic signal?).
@@ -67,26 +76,110 @@ the 2 UBFC-rPPG subjects in `Dataset/` (real videos + contact-PPG ground truth):
      validates the extractor itself).
 4. **Verdict**: REAL iff `SPR >= 4 dB` and `coherence >= 0.35` and BPM plausible.
 
-## Results (360 frames ≈ 12 s @ 29.3 fps, 6/6 correct)
+## Results (360 frames ≈ 12 s @ 29.3 fps)
+
+### MediaPipe CPU reference — 8/8 correct
 
 | clip              | SPR (dB) | coherence |  BPM  | GT BPM | \|r\| GT | verdict |
 |-------------------|---------:|----------:|------:|-------:|:-------:|:-------:|
 | real_s1           |    19.97 |     0.372 | 100.3 |   98.5 |  0.65   | REAL    |
-| real_s2           |    19.56 |     0.562 |  94.3 |   96.0 |  0.75   | REAL    |
+| real_s2           |    17.89 |     0.562 |  80.6 |   97.4 |  0.56   | REAL    |
 | fake_smooth_s1    |     7.81 |    -0.076 |  83.6 |     -- |   --    | FAKE    |
-| fake_smooth_s2    |    12.02 |    -0.192 |  66.4 |     -- |   --    | FAKE    |
-| fake_swap_s2toS1  |    10.17 |    -0.109 |  97.5 |     -- |   --    | FAKE    |
-| fake_swap_s1toS2  |     5.40 |     0.145 |  81.5 |     -- |   --    | FAKE    |
+| fake_smooth_s2    |    11.92 |     0.058 |  48.5 |     -- |   --    | FAKE    |
+| fake_swap_s2toS1  |    11.82 |     0.118 |  92.4 |     -- |   --    | FAKE    |
+| fake_swap_s1toS2  |    10.36 |     0.296 |  75.4 |     -- |   --    | FAKE    |
+| fake_nnswap_s2toS1|    19.81 |     0.210 |  97.5 |     -- |   --    | FAKE    |
+| fake_nnswap_s1toS2|    16.15 |     0.069 |  84.4 |     -- |   --    | FAKE    |
+
+### GPU landmark path (ONNX + CUDA, One-Euro) — 7/8 correct
+
+| clip              | SPR (dB) | coherence |  BPM  | GT BPM | \|r\| GT | verdict |
+|-------------------|---------:|----------:|------:|-------:|:-------:|:-------:|
+| real_s1           |    18.43 |     0.228 | 100.3 |   98.5 |  0.44   | FAKE ⚠  |
+| real_s2           |    15.28 |     0.389 |  88.6 |   97.4 |  0.39   | REAL    |
+| fake_smooth_s1    |     9.49 |     0.099 |  87.8 |     -- |   --    | FAKE    |
+| fake_smooth_s2    |    10.21 |     0.200 |  80.6 |     -- |   --    | FAKE    |
+| fake_swap_s2toS1  |     7.44 |     0.041 |  61.7 |     -- |   --    | FAKE    |
+| fake_swap_s1toS2  |     7.52 |     0.174 |  55.4 |     -- |   --    | FAKE    |
+| fake_nnswap_s2toS1|    16.09 |     0.162 | 103.3 |     -- |   --    | FAKE    |
+| fake_nnswap_s1toS2|    11.02 |     0.056 |  88.6 |     -- |   --    | FAKE    |
+
+⚠ = false negative: real_s1's coherence 0.228 falls below τ=0.35 (the reference
+backend clears it by only 0.02). Landmark accuracy — not the physiology — is the
+binding constraint on the GPU path; see the calibration section below.
 
 Observations:
 
-- HR recovery works on both real subjects (94–100 bpm vs GT 96–99 bpm;
-  |r| against contact PPG 0.65–0.75).
-- Fake clips may still produce *a* BPM number — the demand is not "any pulse"
-  but a *periodic and spatially coherent* one. Coherence separates the groups
-  cleanly (real 0.37–0.56 vs fake -0.19…0.15), matching FakeCatcher's finding.
-- Smoothing leaves a spectral remnant (SPR up to 12 dB) stronger than the face
-  swap leaves (5.4 dB) — i.e. SPR alone is a weaker detector than coherence.
+- HR recovery works on both real subjects vs GT; |r| against contact PPG
+  0.56–0.65 (MediaPipe) / 0.39–0.44 (GPU).
+- **All 6 fakes caught on both backends, including both neural swaps.** Coherence
+  separates the groups cleanly (real 0.37–0.56 vs fake -0.08…0.30 on MediaPipe),
+  matching FakeCatcher's finding.
+- **The neural swaps are the hardest fakes — and they attack SPR, not coherence.**
+  inswapper's feathered paste-back leaves the target's real skin (and its real
+  pulse) around the face margins, so SPR reaches 19.8 dB — *higher* than any
+  naive-swap or smoothed clip, and above the real clips' own SPR in the GPU run.
+  Spectral-only detection would misclassify them; the inter-region coherence test
+  (0.07–0.21) is what exposes them. This reproduces FakeCatcher's central claim
+  against a modern one-shot neural generator.
+- Smoothing leaves a spectral remnant (SPR up to 11.9 dB) — SPR alone is a
+  weaker detector than coherence, and the two features fail independently.
+
+## GPU execution (RTX 5070, onnxruntime-gpu 1.26)
+
+Every inference stage runs on CUDA: SCRFD detection, 478-pt face mesh, ArcFace
+identity embedding, the 554 MB inswapper generator, and region extraction.
+Windows-specific detail: the pip NVIDIA wheels put DLLs in
+`site-packages/nvidia/<pkg>/bin`, which Python never searches —
+`gpu_core.ensure_cuda_dlls()` registers them via `os.add_dll_directory`.
+
+Measured (nvidia-smi, 0.4 s sampling):
+
+| stage                          | util mean | util peak | memory peak | power mean |
+|--------------------------------|----------:|----------:|------------:|-----------:|
+| neural-swap generation (2×360) |     23.1% |     74.0% |     3875 MB |      56.6 W |
+| GPU trace extraction (8 clips) |     31.5% |     39.0% |     1878 MB |      68.9 W |
+| MediaPipe CPU extraction       |      2.6% |      4.0% |     1827 MB |      14.6 W |
+
+Generation peaks at 74% because the decoder → GPU → ordered-paste 3-stage
+pipeline keeps the generator fed. Extraction runs ~60 fps end-to-end at a steady
+~31%. Honest caveat: MediaPipe's *CPU* build (XNNPACK + internal tracking)
+extracts at ~167 fps — faster than the per-frame CUDA mesh path, since it
+amortises detection across frames. The GPU path exists because MediaPipe's
+Windows wheel ships with GPU disabled ("GPU processing is disabled in build
+flags"), so it is the way to keep the *whole* pipeline on the card — not a claim
+that CUDA is always faster for 256-px landmark models.
+
+## GPU landmark calibration (`gpu_core.py`, `tools/`)
+
+The GPU mesh must land landmarks in MediaPipe's index space or every ROI/EXCLUDE
+mask inherited from `rppg.py` drifts. Fitted empirically against the MediaPipe
+CPU reference (`tools/calibrate_scrfd.py`, `fit_crop.py`, `fit_input.py`,
+validated by `validate_gpu.py`, measured by `diag_jitter.py`/`diag_anchors.py`):
+
+| quantity                | before          | after            | how |
+|-------------------------|-----------------|------------------|-----|
+| SCRFD keypoints         | —               | 1.4–2.3 px       | 2 anchors/cell decode, offset 0, stride-scaled preds |
+| Mesh landmarks (s1 / s2)| 12.6 px (s2)    | **6.4 / 7.4 px** | absolute 191×229 crop + affine centre offsets, fitted on both subjects |
+| ROI-anchor points       | —               | 4.0 / 5.5 px     | the 14 points the ROIs use beat the 478-pt mean |
+| Frame-to-frame jitter   | 8–10 px         | **1.7–2.2 px**   | vectorised One-Euro filter (adaptive cutoff); MediaPipe tracker: 0.04–0.06 px |
+| inswapper I/O           | garbage output  | correct faces    | float 0..1 in / 0..1 out, verified over 4 normalisation variants |
+
+Key findings from the calibration:
+
+- **A constant-ratio crop is the wrong model.** The optimal crop is near-constant
+  in *absolute pixels* across both subjects' face sizes; the final geometry is a
+  fixed 191×229 px window with affine centre offsets. This cut mean landmark
+  error ~35–45% versus a proportional fit and rescued subject_2 from 12.6 px.
+  Constants are calibrated for ~110–140 px SCRFD boxes; other resolutions need a
+  refit (`tools/fit_crop.py 1 2`).
+- **Temporal smoothing matters more than raw accuracy.** Per-frame ONNX inference
+  jitters 8–10 px (150× MediaPipe's tracked output), randomising the tiny ROI
+  positions. One-Euro cuts this 5× with negligible lag.
+- **The residual gap is the model, not the plumbing.** Intrinsic mesh residual
+  vs MediaPipe is ~5–6 px even with the optimal crop — that is what pushes
+  real_s1's coherence below threshold on the GPU path. A production system would
+  fine-tune the mesh or keep MediaPipe's tracker and GPU-offload only heavy stages.
 
 ## Real AI-generated videos (downloaded)
 
@@ -106,7 +199,6 @@ portrait video because rPPG SNR drops with face size.
 
 Findings:
 
-- 9/10 clips overall classified correctly (6/6 local + 3/4 AI).
 - Two AI clips show *no* periodic signal at all (SPR ≤ 7 dB, flat/incoherent
   regions) — exactly the "generated faces have no pulse" literature claim.
 - `sadtalker_sing` is a **false negative with an instructive cause**: the head
@@ -121,12 +213,15 @@ Findings:
   degenerate (SPR 0 dB, coherence undefined). Verdict is correct but the
   evidence is weak; small faces are a practical limit of any rPPG detector.
 
-Outputs: `output/deepfake_ppg_results.json`, `output/deepfake_ppg_demo.png`.
-Intermediate fake clips land in `tmp/`; extracted traces cached in `.rppg_cache/`.
+Outputs: `output/deepfake_ppg_results.json` (+ `_meta` block: extractor,
+backends, GPU telemetry), `output/deepfake_ppg_demo.png`, `gpu_*.csv` traces.
+Intermediate fake clips land in `tmp/`; extracted traces cached in
+`.rppg_cache/` keyed per landmark backend.
 
 ```
-python deepfake_detect.py                    # full run (360 frames)
-python deepfake_detect.py --frames 90        # quick run
-python deepfake_detect.py --tau-spr 4 --tau-coh 0.35
-python deepfake_detect.py --ai-glob "tmp/ai/*.mp4"   # include downloaded AI clips
+uv run python deepfake_detect.py                     # full run (360 frames, GPU auto)
+uv run python deepfake_detect.py --extractor mediapipe  # CPU reference run
+uv run python make_deepfakes.py                      # neural-swap clips only
+uv run python tools/validate_gpu.py                  # landmark/inswapper validation
+uv run python deepfake_detect.py --ai-glob "tmp/ai/*.mp4"   # include downloaded AI clips
 ```
