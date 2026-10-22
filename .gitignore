@@ -10,3 +10,5 @@ tmp/
 models/*
 !models/README.md
 tmp_testframe.png
+UBFC/
+UBFC_FACES/

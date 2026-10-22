@@ -186,7 +186,33 @@ class SCRFD:
         self.strides = (8, 16, 32)
 
     def detect(self, frame_bgr):
-        """-> (boxes (N,4) x1y1x2y2 float, kps (N,5), scores (N,)) in input px."""
+        """-> (boxes (N,4) x1y1x2y2 float, kps (N,5), scores (N,)) in input px.
+
+        det_10g anchors miss faces that touch the frame border (tight face
+        crops, e.g. the 128x128 UBFC-Faces mirror, detect at 0 shots). If
+        the plain pass comes back empty, retry once on a 50% reflected
+        border padding and shift the results back into frame coordinates.
+        """
+        res = self._detect_letterboxed(frame_bgr)
+        if len(res[0]):
+            return res
+        h, w = frame_bgr.shape[:2]
+        ph, pw = h // 2, w // 2
+        big = cv2.copyMakeBorder(frame_bgr, ph, ph, pw, pw, cv2.BORDER_REFLECT)
+        boxes, kps, scores = self._detect_letterboxed(big)
+        if len(boxes) == 0:
+            return boxes, kps, scores
+        boxes = boxes - np.array([pw, ph, pw, ph], np.float32)
+        kps = kps - np.array([pw, ph], np.float32)
+        # drop boxes that no longer overlap the real frame
+        keep = ((boxes[:, 2] > 0) & (boxes[:, 0] < w)
+                & (boxes[:, 3] > 0) & (boxes[:, 1] < h))
+        boxes, kps, scores = boxes[keep], kps[keep], scores[keep]
+        keep2 = self._nms(boxes, scores, self.nms_thr)
+        return boxes[keep2], kps[keep2], scores[keep2]
+
+    def _detect_letterboxed(self, frame_bgr):
+        """Core det_10g pass, letterboxed to self.input_size; no padding."""
         h, w = frame_bgr.shape[:2]
         scale = self.input_size / max(h, w)
         nh, nw = int(round(h * scale)), int(round(w * scale))

@@ -50,11 +50,20 @@ features are more robust than "does a peak exist" spectral features.
 
 ## What we do in this repo
 
-`deepfake_detect.py` is a minimal, dependency-light version of that pipeline on
-the 2 UBFC-rPPG subjects in `Dataset/` (real videos + contact-PPG ground truth):
+`deepfake_detect.py` is a minimal, dependency-light version of that pipeline.
+Real clips are auto-discovered from `Dataset/` (2 original full-frame UBFC
+subjects), `UBFC/DATASET_2/` (raw benchmark downloads) and `UBFC_FACES/` (all 42
+benchmark subjects rebuilt from the open UBFC-Faces mirror by
+`tools/build_ubfc_faces.py`; see the dataset section below). Synthetic fakes are
+generated from two donor subjects at the *same resolution as the reals* (crop
+donors when `UBFC_FACES` exists, else the two original full-frame videos):
 
-1. **Clips** (N frames each, default 360 ≈ 12 s):
-   - `real_s1`, `real_s2` — the original videos.
+1. **Clips** (equal-duration protocol, `--duration` seconds each, default 12):
+   every clip (real and fake) is trimmed to `round(duration * fps)` frames read
+   from frame 0 at its own fps, so a 29.26 fps source contributes the same
+   seconds as a 29.95 fps source (`--frames N` still forces a fixed frame count
+   if needed). Types:
+   - `real_s<N>` — one clip per discovered real subject.
    - `fake_smooth_*` — temporal box-car over frames (mimics pulsation-free
      generated texture).
    - `fake_swap_*` — donor face aligned by landmarks (eyes/nose/mouth) and
@@ -170,6 +179,98 @@ Observations:
   (MediaPipe) and near-real BPM, and still fails only the coherence test.
 - Smoothing leaves a spectral remnant (SPR up to 11.9 dB) — SPR alone is a
   weaker detector than coherence, and the two features fail independently.
+
+## Larger dataset + equal duration (UBFC-Faces mirror)
+
+Two upgrades ship in this version: the real set grows from 2 subjects to the
+full 42-subject UBFC-rPPG benchmark, and every clip is evaluated over the same
+*time* window (`--duration`), both changes checked against the exact source
+fps of each video.
+
+### Dataset acquisition
+
+The officially hosted download (Google Drive, `DATASET_2`, ~55 GB) hit
+Drive's transfer quota while being fetched, so this experiment uses the open
+**UBFC-rPPG-Faces** Hugging Face mirror (Horusprg, 316 MB): all 42 subjects
+stored as ~1,500-2,050 x 128x128 mpeg4 clip files per subject, each a
+5-frame stride-1 sliding window over the original recording, plus
+`metadata.csv` with one PPG sample per clip. Reconstructing the classic
+layout:
+
+```
+python tools/fetch_ubfc_faces.py                # resumable 316 MB download
+python tools/build_ubfc_faces.py                # -> UBFC_FACES/subjectN/{vid.avi, ground_truth.txt}
+python tools/build_ubfc_faces.py --subjects 1 3 # subset
+```
+
+Validation of the rebuild against the repo's original full-frame subject_1:
+
+- clip stride is contiguous: M closes MAD(frame4_N, frame3_N+1) = 1.7-2.0 px
+  across all 42 subjects;
+- frame count 1543 = 1547 source frames - 4 and fps 29.264 == original fps;
+- mirrored oximeter waveform has the identical Welch peak (109.7 bpm) and SNR
+  (35.9 dB); per-frame HR correlates 0.77 with the original GT.
+
+Note: the mirrored PPG channel is exposed through a different smoothing /
+alignment, so pointwise `|r| GT` values for mirror subjects are lower than for
+the original full-frame subjects (0.0-0.6 vs 0.6-0.7) — the HR truth itself is
+solid (BPM column matches GT within a few bpm for most subjects).
+
+### Equal-duration protocol
+
+Native fps differs across subjects (28.77-29.95), so frame-count windows are
+not time windows. `extract_traces()` now reads `round(duration*fps)` frames
+from frame 0 per clip; fake generation does the same at the donor fps
+(`frames_for_duration`). Output/cache filenames key on the window
+(`..._12s` / `..._20s`), and results JSON/PNG carry a duration suffix.
+
+### Results (44 reals + 10 fakes, 20 s windows, MediaPipe CPU)
+
+Fakes are generated from crop-scale donors (UBFC_FACES subject1/subject3) so
+real/fake comparisons stay at one resolution. The GPU landmark path is not
+usable on these 128x128 face-fill crops (its absolute crop fit was calibrated
+on full frames and lands ~51 px off; `SCRFD.detect` did gain a reflected-border
+retry to detect the border-touching crops at all). `--extractor mediapipe` is
+the default and the reference.
+
+| group | clips | SPR (dB) mean / range | coherence mean / range |
+|-------|------:|----------------------|------------------------|
+| real (full-frame originals x2) | 2 | 14.7 / 13.6-15.8 | 0.56 / 0.44-0.69 |
+| real (mirror crops x42)        | 42 | 13.2 / 8.1-18.1 | 0.18 / -0.04-0.51 |
+| fake (all generators)          | 10 | 8.5 / 3.4-13.1 | 0.05 / -0.12-0.19 |
+
+All 10 fakes are still caught at the shipped thresholds (SPR >= 4 dB,
+coherence >= 0.35, BPM 45-140; 0 false positives). But only 6/44 reals pass
+those same thresholds (true positive rate 14%), because the mirror's lossy
+128x128 mpeg4 encoding removes much of the fine pulse contrast: cheek ROIs
+become ~9 px ellipses and much of the coherence signal, which was 0.47-0.71 on
+the full-frame originals, collapses to 0.0-0.3 on the crops. A threshold
+sweep (tau-spr fixed at 4 dB) shows the honest operating point:
+
+| tau-coh | accuracy | TPR (real) | FPR (fake) |
+|--------:|---------:|-----------:|-----------:|
+| 0.15 | 0.67 | 0.61 | 0.10 |
+| 0.20 | 0.59 | 0.50 | 0.00 |
+| 0.35 (shipped) | 0.30 | 0.14 | 0.00 |
+
+The 20 s windows beat 12 s windows on every point (accuracy 0.67 vs 0.61 max),
+confirming the SNR-ceiling diagnosis: with more seconds per clip the real
+crops gain SPR/coherence while the temporally-blunted fakes do not. Takeaway:
+**the coherence feature still separates real from fake perfectly with zero
+false positives, but calibration must move with the clip scale** - the
+full-frame thresholds reject half of the real crops. For benchmark-grade
+accuracy, refit thresholds on the new set or rerun on raw 640x480 DATASET_2
+videos once the official Drive quota resets (`python deepfake_detect.py` will
+pick them up from `UBFC/DATASET_2/` automatically).
+
+Usage recap:
+
+```
+python deepfake_detect.py --extractor mediapipe --duration 12    # 44 reals + 10 fakes, 12 s
+python deepfake_detect.py --extractor mediapipe --duration 20    # best crop-data operating point
+python deepfake_detect.py --max-real 8 --duration 12             # quick subset run
+python deepfake_detect.py --tau-coh 0.15                          # crop-calibrated thresholds
+```
 
 ## GPU execution (RTX 5070, onnxruntime-gpu 1.26)
 
