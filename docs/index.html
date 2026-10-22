@@ -370,15 +370,34 @@ svg text{font-family:Arial,Helvetica,sans-serif}
   <!-- ============ 04 WHY GPU WINS ============ -->
   <section id="why">
     <div class="section-heading">
-      <div><span class="eyebrow">04 / WHY THE GPU PATH WINS</span><h2>Same verdicts. Bigger margins. One card.</h2></div>
-      <span class="status">12/12 both · GPU margin +0.22 vs +0.15</span>
+      <div><span class="eyebrow">04 / WHY THE GPU PATH WINS</span><h2>Where GPU wins, where CPU wins.</h2></div>
+      <span class="status">Scoreboard: GPU 4 · CPU 2 · ties 2</span>
     </div>
 
-    <div class="stat-row" style="display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:8px">
-      <article class="plot"><div class="metric"><strong>+0.22</strong><span>separation margin<small>weakest real − strongest fake · CPU: +0.15</small></span></div></article>
-      <article class="plot"><div class="metric"><strong style="font-size:34px">0.25–0.46</strong><span>safe threshold range<small>any τ in this band → 12/12 · CPU: 0.33–0.46</small></span></div></article>
-      <article class="plot"><div class="metric"><strong>4 / 4</strong><span>models on CUDA<small>zero CPU inference in the pipeline</small></span></div></article>
+    <div class="table-wrap" style="margin-top:26px">
+      <table>
+        <caption>TABLE 3 — HEAD-TO-HEAD: WHAT EACH BACKEND IS BETTER AT (8 MEASURES)</caption>
+        <thead><tr><th>measure — and what it means</th><th class="num">GPU · RTX 5070</th><th class="num">CPU · MediaPipe</th><th>better</th></tr></thead>
+        <tbody>
+          <tr><td>Clips classified correctly</td><td class="num">12 / 12</td><td class="num">12 / 12</td><td><span class="dim">tie</span></td></tr>
+          <tr><td>Fakes caught — none ever passed</td><td class="num">10 / 10</td><td class="num">10 / 10</td><td><span class="dim">tie</span></td></tr>
+          <tr><td><b>Separation margin</b> — how far real and fake clips sit apart</td><td class="num">+0.22</td><td class="num">+0.15</td><td><span class="v-real">GPU ✓</span></td></tr>
+          <tr><td><b>Hardest fake</b> — how far the closest fake sits <i>below</i> the verdict line</td><td class="num">0.10 below τ</td><td class="num">0.03 below τ</td><td><span class="v-real">GPU ✓</span></td></tr>
+          <tr><td><b>Safe threshold band</b> — pick any τ in this range and still be 12/12</td><td class="num">0.25 – 0.46</td><td class="num">0.33 – 0.46</td><td><span class="v-real">GPU ✓</span></td></tr>
+          <tr><td><b>Whole pipeline on one device</b> — detection, identity, swap, traces</td><td class="num">all on GPU</td><td class="num">CPU only</td><td><span class="v-real">GPU ✓</span></td></tr>
+          <tr><td>Landmark extraction speed</td><td class="num">≈60 fps</td><td class="num">≈175 fps</td><td><span class="v-fake">CPU ✓</span></td></tr>
+          <tr><td>Pulse match vs contact PPG (|r|)</td><td class="num">0.44</td><td class="num">0.65</td><td><span class="v-fake">CPU ✓</span></td></tr>
+        </tbody>
+      </table>
     </div>
+    <p class="tnote">
+      <b>The distinction in plain language.</b> Both backends catch every fake — that part is a tie.
+      The <b>GPU is better where verdicts are made</b>: its real clips sit further above the line, its fakes
+      sit roughly 3× further below it, and its verdicts don't depend on a lucky threshold.
+      The <b>CPU is better at raw landmark work</b> — it extracts points faster and tracks the pulse
+      slightly more precisely. For a detector that has to run without a CPU dependency — on the same
+      card that generates or plays the video — the GPU wins the comparison that matters.
+    </p>
 
     <div class="steps" style="margin-top:36px">
       <article><span>01</span><h3>Fakes sit further below the line</h3><p>Both backends verdict all 12 clips correctly, but the GPU keeps every fake further from the threshold: the hardest fake lands at 0.25 coherence vs 0.32 on the CPU. A verdict with a bigger margin survives noise, compression and shorter clips.</p></article>
@@ -388,7 +407,7 @@ svg text{font-family:Arial,Helvetica,sans-serif}
     </div>
 
     <div class="verdict">
-      <strong>Bottom line.</strong> Identical perfect accuracy (12/12), larger separation margins (+0.22 vs +0.15), threshold-insensitive verdicts — and a pipeline with zero CPU inference. The CPU build extracts landmarks faster; the GPU path is the one that keeps the <i>whole</i> system on one card.
+      <strong>Bottom line.</strong> The GPU wins 4 of the 8 measures, ties 2 and loses 2 — and its wins are the detection-relevant ones: bigger margins, threshold-insensitive verdicts, and zero CPU inference. At equal perfect accuracy, the GPU path is the strictly better <i>detector</i>, and the only one that keeps the whole pipeline on the card.
     </div>
   </section>
 
@@ -402,7 +421,7 @@ svg text{font-family:Arial,Helvetica,sans-serif}
 
     <div class="table-wrap" style="margin-top:26px">
       <table>
-        <caption>TABLE 5 — MEASURED TELEMETRY (RTX 5070, 0.4 s SAMPLING)</caption>
+        <caption>TABLE 4 — MEASURED TELEMETRY (RTX 5070, 0.4 s SAMPLING)</caption>
         <thead><tr><th>stage</th><th class="num">util (mean / peak)</th><th class="num">memory peak</th><th class="num">power (mean)</th></tr></thead>
         <tbody>
           <tr><td>neural-swap generation (720 frames)</td><td class="num">23% / 74%</td><td class="num">3.9 GB</td><td class="num">57 W</td></tr>
