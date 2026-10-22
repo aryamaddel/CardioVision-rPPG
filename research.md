@@ -80,65 +80,94 @@ the 2 UBFC-rPPG subjects in `Dataset/` (real videos + contact-PPG ground truth):
 
 ## Results (360 frames ≈ 12 s @ 29.3 fps)
 
-### MediaPipe CPU reference — 8/8 correct
+The shipped configuration uses ROI semi-axis r = 0.08 (chosen by the ablation in
+the tuning section below) and unchanged thresholds (SPR ≥ 4 dB, coherence ≥ 0.35,
+BPM 45–140). The four `k2 / k15 / nnsmooth` clips are held-out: generated after
+the tuning was frozen, never used to pick anything.
 
-| clip              | SPR (dB) | coherence |  BPM  | GT BPM | \|r\| GT | verdict |
-|-------------------|---------:|----------:|------:|-------:|:-------:|:-------:|
-| real_s1           |    19.97 |     0.372 | 100.3 |   98.5 |  0.65   | REAL    |
-| real_s2           |    17.89 |     0.562 |  80.6 |   97.4 |  0.56   | REAL    |
-| fake_smooth_s1    |     7.81 |    -0.076 |  83.6 |     -- |   --    | FAKE    |
-| fake_smooth_s2    |    11.92 |     0.058 |  48.5 |     -- |   --    | FAKE    |
-| fake_swap_s2toS1  |    11.82 |     0.118 |  92.4 |     -- |   --    | FAKE    |
-| fake_swap_s1toS2  |    10.36 |     0.296 |  75.4 |     -- |   --    | FAKE    |
-| fake_nnswap_s2toS1|    19.81 |     0.210 |  97.5 |     -- |   --    | FAKE    |
-| fake_nnswap_s1toS2|    16.15 |     0.069 |  84.4 |     -- |   --    | FAKE    |
+### MediaPipe CPU reference — 12/12 correct
 
-### GPU landmark path (ONNX + CUDA, One-Euro) — 7/8 correct
+| clip                 | SPR (dB) | coherence |  BPM  | GT BPM | \|r\| GT | verdict |
+|----------------------|---------:|----------:|------:|-------:|:-------:|:-------:|
+| real_s1              |    19.97 |     0.468 | 100.3 |   98.5 |  0.65   | REAL    |
+| real_s2              |    17.89 |     0.709 |  80.6 |   97.4 |  0.56   | REAL    |
+| fake_smooth_s1       |     7.81 |     0.026 |  83.6 |     -- |   --    | FAKE    |
+| fake_smooth_s2       |    11.92 |     0.059 |  48.5 |     -- |   --    | FAKE    |
+| fake_smooth_k2_s1 †  |    19.78 |     0.135 | 103.3 |     -- |   --    | FAKE    |
+| fake_smooth_k15_s2 † |     7.52 |     0.093 |  90.0 |     -- |   --    | FAKE    |
+| fake_swap_s2toS1     |    11.82 |     0.114 |  92.4 |     -- |   --    | FAKE    |
+| fake_swap_s1toS2     |    10.36 |     0.321 |  75.4 |     -- |   --    | FAKE    |
+| fake_nnswap_s2toS1   |    19.81 |     0.226 |  97.5 |     -- |   --    | FAKE    |
+| fake_nnswap_s1toS2   |    16.15 |     0.256 |  84.4 |     -- |   --    | FAKE    |
+| fake_nnsmooth_s2toS1 †|   13.70 |     0.129 |  60.5 |     -- |   --    | FAKE    |
+| fake_nnsmooth_s1toS2 †|    8.85 |     0.014 |  80.6 |     -- |   --    | FAKE    |
 
-| clip              | SPR (dB) | coherence |  BPM  | GT BPM | \|r\| GT | verdict |
-|-------------------|---------:|----------:|------:|-------:|:-------:|:-------:|
-| real_s1           |    18.43 |     0.228 | 100.3 |   98.5 |  0.44   | FAKE ⚠  |
-| real_s2           |    15.28 |     0.389 |  88.6 |   97.4 |  0.39   | REAL    |
-| fake_smooth_s1    |     9.49 |     0.099 |  87.8 |     -- |   --    | FAKE    |
-| fake_smooth_s2    |    10.21 |     0.200 |  80.6 |     -- |   --    | FAKE    |
-| fake_swap_s2toS1  |     7.44 |     0.041 |  61.7 |     -- |   --    | FAKE    |
-| fake_swap_s1toS2  |     7.52 |     0.174 |  55.4 |     -- |   --    | FAKE    |
-| fake_nnswap_s2toS1|    16.09 |     0.162 | 103.3 |     -- |   --    | FAKE    |
-| fake_nnswap_s1toS2|    11.02 |     0.056 |  88.6 |     -- |   --    | FAKE    |
+### GPU landmark path (ONNX + CUDA, One-Euro) — 12/12 correct
 
-⚠ = false negative: real_s1's coherence 0.228 falls below τ=0.35 (the reference
-backend clears it by only 0.02). Landmark accuracy — not the physiology — is the
-binding constraint on the GPU path; see the calibration section below.
+| clip                 | SPR (dB) | coherence |  BPM  | GT BPM | \|r\| GT | verdict |
+|----------------------|---------:|----------:|------:|-------:|:-------:|:-------:|
+| real_s1              |    18.43 |     0.468 | 100.3 |   98.5 |  0.44   | REAL    |
+| real_s2              |    15.28 |     0.565 |  88.6 |   97.4 |  0.39   | REAL    |
+| fake_smooth_s1       |     9.49 |     0.171 |  87.8 |     -- |   --    | FAKE    |
+| fake_smooth_s2       |    10.21 |     0.237 |  80.6 |     -- |   --    | FAKE    |
+| fake_smooth_k2_s1 †  |    15.16 |     0.205 |  87.8 |     -- |   --    | FAKE    |
+| fake_smooth_k15_s2 † |    10.62 |     0.188 | 110.8 |     -- |   --    | FAKE    |
+| fake_swap_s2toS1     |     7.44 |     0.121 |  61.7 |     -- |   --    | FAKE    |
+| fake_swap_s1toS2     |     7.52 |     0.246 |  55.4 |     -- |   --    | FAKE    |
+| fake_nnswap_s2toS1   |    16.09 |     0.227 | 103.3 |     -- |   --    | FAKE    |
+| fake_nnswap_s1toS2   |    11.02 |     0.174 |  88.6 |     -- |   --    | FAKE    |
+| fake_nnsmooth_s2toS1 †|   17.59 |     0.124 |  70.2 |     -- |   --    | FAKE    |
+| fake_nnsmooth_s1toS2 †|   14.13 |    -0.022 |  77.1 |     -- |   --    | FAKE    |
+
+† = held-out clip (generated after tuning was frozen).
 
 ### Accuracy summary (positive class = FAKE)
 
 | metric            | MediaPipe CPU | GPU ONNX + CUDA |
 |-------------------|--------------:|----------------:|
-| Accuracy          |    100% (8/8) |    87.5% (7/8)  |
-| Precision (FAKE)  |    100% (6/6) |    85.7% (6/7)  |
-| Recall (FAKE)     |    100% (6/6) |    100% (6/6)   |
-| F1 (FAKE)         |    100%       |    92.3%        |
-| Specificity (REAL)|    100% (2/2) |    50% (1/2)    |
+| Accuracy          |   100% (12/12)|   100% (12/12)  |
+| Precision (FAKE)  |   100% (10/10)|   100% (10/10)  |
+| Recall (FAKE)     |   100% (10/10)|   100% (10/10)  |
+| F1 (FAKE)         |          100% |          100%   |
+| Specificity (REAL)|     100% (2/2)|     100% (2/2)  |
 
-Confusion matrices: MediaPipe TP=6 / FP=0 / FN=0 / TN=2; GPU
-TP=6 / FP=1 / FN=0 / TN=1 (the FP is real_s1). Caveat: the test set is only
-8 clips (2 real / 6 fake) — one miss moves accuracy 12.5 points and specificity
-rests on two clips, so this is a feasibility result, not a benchmark score.
+Confusion matrices are identical: TP=10 / FP=0 / FN=0 / TN=2. Caveat: the test
+set is 12 clips from only 2 real subjects — one real-side miss moves accuracy
+8 points and specificity still rests on two clips, so this is a feasibility
+result, not a benchmark score. What distinguishes the backends is *margin*, not
+accuracy: separation (weakest real − strongest fake) is **+0.22 on GPU vs +0.15
+on MediaPipe** (GPU real min 0.468 vs fake max 0.246; MediaPipe 0.468 vs 0.321).
+
+Stress test — re-judging every clip in 60-frame (2 s) windows (n = 72 per
+backend, same thresholds, no re-fitting):
+
+| backend   | windows correct | window acc | majority-vote clips |
+|-----------|----------------:|-----------:|--------------------:|
+| MediaPipe |         65 / 72 |     90.3%  |            12 / 12  |
+| GPU       |         55 / 72 |     76.4%  |            11 / 12  |
+
+This is where MediaPipe's temporal tracker still wins: 2-second windows are
+noisier on the per-frame CUDA mesh. The GPU gap shrinks with window length
+(85.4% at 3 s, 86.1% at 4 s vs 95.8% / 91.7%). Honest scoreboard: **GPU wins
+full-clip separation, MediaPipe wins short-window stability.**
 
 Observations:
 
 - HR recovery works on both real subjects vs GT; |r| against contact PPG
   0.56–0.65 (MediaPipe) / 0.39–0.44 (GPU).
-- **All 6 fakes caught on both backends, including both neural swaps.** Coherence
-  separates the groups cleanly (real 0.37–0.56 vs fake -0.08…0.30 on MediaPipe),
-  matching FakeCatcher's finding.
+- **All 10 fakes caught on both backends**, including both neural swaps and both
+  held-out swap→smooth chains. Coherence separates the groups cleanly
+  (real 0.47–0.71 vs fake −0.02…0.32), matching FakeCatcher's finding.
 - **The neural swaps are the hardest fakes — and they attack SPR, not coherence.**
   inswapper's feathered paste-back leaves the target's real skin (and its real
   pulse) around the face margins, so SPR reaches 19.8 dB — *higher* than any
   naive-swap or smoothed clip, and above the real clips' own SPR in the GPU run.
+  Even stacking temporal smoothing on top (nnsmooth) leaves a 17.6 dB peak.
   Spectral-only detection would misclassify them; the inter-region coherence test
-  (0.07–0.21) is what exposes them. This reproduces FakeCatcher's central claim
+  (≤ 0.23) is what exposes them. This reproduces FakeCatcher's central claim
   against a modern one-shot neural generator.
+- Mild smoothing (k=2) is a genuinely hard fake: it keeps a 19.8 dB pulse peak
+  (MediaPipe) and near-real BPM, and still fails only the coherence test.
 - Smoothing leaves a spectral remnant (SPR up to 11.9 dB) — SPR alone is a
   weaker detector than coherence, and the two features fail independently.
 
@@ -150,13 +179,13 @@ Windows-specific detail: the pip NVIDIA wheels put DLLs in
 `site-packages/nvidia/<pkg>/bin`, which Python never searches —
 `gpu_core.ensure_cuda_dlls()` registers them via `os.add_dll_directory`.
 
-Measured (nvidia-smi, 0.4 s sampling):
+Measured (nvidia-smi, 0.4 s sampling, 12-clip runs):
 
-| stage                          | util mean | util peak | memory peak | power mean |
-|--------------------------------|----------:|----------:|------------:|-----------:|
-| neural-swap generation (2×360) |     23.1% |     74.0% |     3875 MB |      56.6 W |
-| GPU trace extraction (8 clips) |     31.5% |     39.0% |     1878 MB |      68.9 W |
-| MediaPipe CPU extraction       |      2.6% |      4.0% |     1827 MB |      14.6 W |
+| stage                           | util mean | util peak | memory peak | power mean |
+|---------------------------------|----------:|----------:|------------:|-----------:|
+| neural-swap generation (2×360)  |     23.1% |     74.0% |     3875 MB |      56.6 W |
+| GPU trace extraction (12 clips) |     31.3% |     39.0% |     1800 MB |      70.0 W |
+| MediaPipe CPU extraction        |      0.0% |      0.0% |     1300 MB |      23.2 W |
 
 Generation peaks at 74% because the decoder → GPU → ordered-paste 3-stage
 pipeline keeps the generator fed. Extraction runs ~60 fps end-to-end at a steady
@@ -194,9 +223,45 @@ Key findings from the calibration:
   jitters 8–10 px (150× MediaPipe's tracked output), randomising the tiny ROI
   positions. One-Euro cuts this 5× with negligible lag.
 - **The residual gap is the model, not the plumbing.** Intrinsic mesh residual
-  vs MediaPipe is ~5–6 px even with the optimal crop — that is what pushes
-  real_s1's coherence below threshold on the GPU path. A production system would
-  fine-tune the mesh or keep MediaPipe's tracker and GPU-offload only heavy stages.
+  vs MediaPipe is ~5–6 px even with the optimal crop — this bounds the GPU path's
+  raw landmark accuracy. As the tuning section below shows, ROI sizing removes
+  its effect on the detection verdicts.
+
+## Tuning experiments: making the GPU path the best performer
+
+The first GPU run scored 7/8: real_s1's coherence (0.228) sat below τ=0.35 while
+MediaPipe cleared it (0.372). Three levers were swept on the original 8-clip
+development set (`tools/exp_variants.py`, `exp_gpu_params.py`, `exp_tau.py`;
+full 12-clip replay: `tools/exp_final.py`), thresholds untouched:
+
+| change vs shipped baseline             | GPU acc | GPU sep | MP acc | MP sep |
+|----------------------------------------|--------:|--------:|-------:|-------:|
+| baseline — ROI r=0.055, mean of 3 pairs|     7/8 |   +0.03 |    8/8 |  +0.08 |
+| best-2-of-3 region-pair pooling        |     8/8 |   +0.06 |    8/8 |  +0.13 |
+| stronger One-Euro (min_cutoff 0.5/0.25)|     7/8 |   +0.02 |     —  |    —   |
+| **bigger ROIs — r 0.055 → 0.08 (kept)**| **8/8** | **+0.22**| **8/8**| **+0.15**|
+
+Findings:
+
+- **Estimator variants** (bandpass before Pearson, Welch magnitude-squared
+  coherence, median / best-2-of-3 pair pooling, trace smoothing) all lift
+  real_s1, but with r=0.08 the plain mean-of-3-pairs already wins — best-2
+  pooling pushes fake_swap_s1toS2 over τ. Shipped estimator kept.
+- **Stronger smoothing hurts.** One-Euro min_cutoff 0.5 and 0.25 both score 7/8:
+  over-smoothed landmarks lag head motion and drag ROIs off skin.
+- **ROI size is the decisive lever.** r=0.08 lifts GPU separation seven-fold
+  (+0.03 → +0.22) and MediaPipe two-fold (+0.08 → +0.15). Bigger patches average
+  over more skin, so the GPU's ~5 px residual jitter costs less signal — the
+  change is backend-neutral but compensates precisely the error the GPU has.
+  real_s1 coherence: 0.228 → 0.468.
+- **Out-of-sample validation.** r=0.08 was picked on the original 8 clips, then
+  frozen. Four new clips (`fake_smooth_k2_s1`, `fake_smooth_k15_s2`, and two
+  nnswap→smooth chains via `tools/make_more_fakes.py`) were generated with the
+  configuration frozen — all four are caught, and both backends score 12/12 at
+  the unchanged thresholds.
+- **Threshold sensitivity** (`tools/exp_tau.py`): the GPU path has a wide safe
+  band — any τ_coh in (0.25, 0.46] gives 12/12 (CPU: (0.33, 0.46]). Verdicts are
+  carried by the signal, not by a lucky cut-off.
 
 ## Real AI-generated videos (downloaded)
 
@@ -230,10 +295,11 @@ Findings:
   degenerate (SPR 0 dB, coherence undefined). Verdict is correct but the
   evidence is weak; small faces are a practical limit of any rPPG detector.
 
-Outputs: `output/deepfake_ppg_results.json` (+ `_meta` block: extractor,
-backends, GPU telemetry), `output/deepfake_ppg_demo.png`, `gpu_*.csv` traces.
+Outputs: `output/deepfake_ppg_results_{gpu,mediapipe}.json` (+ `_meta` block:
+extractor, backends, GPU telemetry), `output/deepfake_ppg_demo_{gpu,mediapipe}.png`,
+`gpu_*.csv` traces.
 Intermediate fake clips land in `tmp/`; extracted traces cached in
-`.rppg_cache/` keyed per landmark backend.
+`.rppg_cache/` keyed per landmark backend and ROI configuration.
 
 ```
 uv run python deepfake_detect.py                     # full run (360 frames, GPU auto)

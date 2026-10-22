@@ -68,7 +68,13 @@ REGIONS = {
     "right_cheek": [205, 50, 118, 101],
     "left_cheek": [425, 280, 348, 330],
 }
-ROI_R = 0.055  # ellipse semi-axis, fraction of face scale
+# Ellipse semi-axis, fraction of face scale. 0.08 (not the original 0.055) was
+# chosen by the ROI ablation in tools/exp_gpu_params.py: bigger patches average
+# over more skin, which tolerates the GPU path's ~5 px landmark error. At the
+# shipped thresholds this lifts GPU separation from +0.03 to +0.22 (12/12),
+# and lifts MediaPipe too (+0.08 -> +0.15) -- the change is backend-neutral,
+# re-validated out-of-sample on 4 held-out clips (tools/exp_final.py).
+ROI_R = 0.08
 SMOOTH_K = 9   # temporal box-car half-length for the "smooth" fake
 SWAP_ANCHORS = [33, 263, 1, 61, 291]  # outer eyes, nose tip, mouth corners
 
@@ -204,14 +210,16 @@ def extract_traces(video: Path, n_frames: int, fps_hint: float,
 
 
 # ------------------------------------------------------------------- fakes
-def make_smooth_fake(src: Path, dst: Path, n_frames: int):
+def make_smooth_fake(src: Path, dst: Path, n_frames: int, k: int = SMOOTH_K):
+    """Temporal box-car average (half-length `k`): kills pulse without any
+    generative model, so it doubles as a controlled fake-strength dial."""
     if dst.exists():
         return dst
     cap = cv2.VideoCapture(str(src))
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)); hh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     wr = cv2.VideoWriter(str(dst), cv2.VideoWriter_fourcc(*"MJPG"), fps, (w, hh))
-    buf = deque(maxlen=2 * SMOOTH_K + 1)
+    buf = deque(maxlen=2 * k + 1)
     for i in range(n_frames):
         ok, f = cap.read()
         if not ok:
@@ -345,6 +353,8 @@ def main():
     fakes = {
         "fake_smooth_s1": make_smooth_fake(videos[1], TMP / f"fake_smooth_s1_{args.frames}.avi", args.frames),
         "fake_smooth_s2": make_smooth_fake(videos[2], TMP / f"fake_smooth_s2_{args.frames}.avi", args.frames),
+        "fake_smooth_k2_s1": make_smooth_fake(videos[1], TMP / f"fake_smooth_k2_s1_{args.frames}.avi", args.frames, k=2),
+        "fake_smooth_k15_s2": make_smooth_fake(videos[2], TMP / f"fake_smooth_k15_s2_{args.frames}.avi", args.frames, k=15),
         "fake_swap_s2toS1": make_swap_fake(videos[1], videos[2], TMP / f"fake_swap_s2toS1_{args.frames}.avi", args.frames),
         "fake_swap_s1toS2": make_swap_fake(videos[2], videos[1], TMP / f"fake_swap_s1toS2_{args.frames}.avi", args.frames),
     }
@@ -357,6 +367,12 @@ def main():
         fakes["fake_nnswap_s1toS2"] = make_nnswap_fake(
             videos[2], videos[1], TMP / f"fake_nnswap_s1toS2_{args.frames}.avi",
             args.frames, gpu=True)
+        # neural swap -> smooth chains: the strongest fakes in the set, i.e.
+        # "what if a generator stacks temporal smoothing on the identity swap"
+        for d, s in (("s2toS1", "fake_nnswap_s2toS1"), ("s1toS2", "fake_nnswap_s1toS2")):
+            if s in fakes:
+                fakes[f"fake_nnsmooth_{d}"] = make_smooth_fake(
+                    fakes[s], TMP / f"fake_nnsmooth_{d}_{args.frames}.avi", args.frames)
     except Exception as exc:  # noqa: BLE001 - classic fakes still testable
         print(f"  [warn] neural swap clips skipped: {exc}")
     gen_stats = gen_mon.stop()
@@ -374,8 +390,9 @@ def main():
     print("== extracting rPPG traces ==")
     ex_mon = GpuMonitor(interval=0.5).start(label=f"extraction[{kind}]")
     # cache tag: gpu landmarks are One-Euro-smoothed with the absolute-crop
-    # joint fit (v3; earlier caches predate the refit and must not mix)
-    tag = f"{kind}_1e3" if kind == "gpu" else kind
+    # joint fit (v3); r08 = the shipped ROI_R=0.08. Both changed every trace,
+    # so older caches (gpu_1e3 / plain mediapipe at r=0.055) must not mix.
+    tag = f"{kind}_1e3r08" if kind == "gpu" else f"{kind}_r08"
     results = {}
     for name, path, subj in clips:
         traces, fps = extract_traces(path, args.frames, 30.0, tag=tag,
@@ -413,7 +430,7 @@ def main():
         "tau_spr_db": TAU_SPR_DB,
         "tau_coh": TAU_COH,
     }
-    (OUT / "deepfake_ppg_results.json").write_text(json.dumps(payload, indent=2))
+    (OUT / f"deepfake_ppg_results_{kind}.json").write_text(json.dumps(payload, indent=2))
 
     # ---- figure
     import matplotlib
@@ -459,8 +476,8 @@ def main():
 
     fig.suptitle("rPPG deepfake detection: real skin pulsates coherently, fakes do not")
     fig.tight_layout()
-    fig.savefig(OUT / "deepfake_ppg_demo.png", dpi=110)
-    print(f"\nwrote {OUT / 'deepfake_ppg_results.json'} and {OUT / 'deepfake_ppg_demo.png'}")
+    fig.savefig(OUT / f"deepfake_ppg_demo_{kind}.png", dpi=110)
+    print(f"\nwrote {OUT / f'deepfake_ppg_results_{kind}.json'} and {OUT / f'deepfake_ppg_demo_{kind}.png'}")
     print(f"extractor={kind} | onnx backends: {backend_report()}")
 
 

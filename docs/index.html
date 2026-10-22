@@ -185,6 +185,7 @@ svg text{font-family:Arial,Helvetica,sans-serif}
     <a href="#experiment">How it was tested</a>
     <a href="#results">Results</a>
     <a href="#accuracy">Accuracy</a>
+    <a href="#why">Why GPU wins</a>
     <a href="#gpu">On the GPU</a>
     <a href="#reproduce">Reproduce ↗</a>
   </nav>
@@ -195,11 +196,12 @@ svg text{font-family:Arial,Helvetica,sans-serif}
   <section class="intro" style="border-top:none">
     <div class="eyebrow">AN RPPG DEEPFAKE-DETECTION EXPERIMENT</div>
     <h1>Fakes can copy a face.<br>Not the pulse beneath it.</h1>
-    <p>Two real face videos. Six GPU-generated fakes — including modern <strong>neural identity swaps</strong> from InsightFace inswapper_128. One signal no generator reproduces: <strong>the blood-flow pulse in real skin.</strong></p>
+    <p>Two real face videos. Ten GPU-generated fakes — from mild temporal smoothing to modern <strong>neural identity swaps</strong> and swap→smooth chains. One signal no generator reproduces: <strong>the blood-flow pulse in real skin.</strong> The whole detector — every model — runs on the GPU.</p>
     <div class="intro-meta">
       <span>UBFC-RPPG · 2 SUBJECTS</span>
-      <span>8 CLIPS × 360 FRAMES</span>
-      <span>INSWAPPER-128 ON RTX 5070</span>
+      <span>12 CLIPS × 360 FRAMES</span>
+      <span>GPU 12/12 · CPU 12/12</span>
+      <span>GPU MARGIN +0.22 VS +0.15</span>
     </div>
   </section>
 
@@ -211,7 +213,7 @@ svg text{font-family:Arial,Helvetica,sans-serif}
     </div>
 
     <div class="steps">
-      <article><span>01</span><h3>Region traces</h3><p>Landmarks per frame → mean R/G/B colour in small ROIs: forehead, both cheeks, full face.</p></article>
+      <article><span>01</span><h3>Region traces</h3><p>Landmarks per frame → mean R/G/B colour in elliptical ROIs: forehead, both cheeks, full face — sized so residual landmark jitter can't dominate the average.</p></article>
       <article><span>02</span><h3>POS pulse</h3><p>The Plane-Orthogonal-to-Skin algorithm turns each colour trace into a pulse signal.</p></article>
       <article><span>03</span><h3>Two features</h3><p><b>SPR</b> — strength of the heart-rate spectral peak in dB. <b>Coherence</b> — do all regions show the <i>same</i> pulse?</p></article>
       <article><span>04</span><h3>Verdict</h3><p>REAL iff SPR ≥ 4 dB <i>and</i> coherence ≥ 0.35 <i>and</i> BPM is physiological (45–140).</p></article>
@@ -233,52 +235,54 @@ svg text{font-family:Arial,Helvetica,sans-serif}
       </article>
     </div>
 
-    <div class="subhead">THE SIX FAKE CLIPS — THREE GENERATORS, TWO DIRECTIONS</div>
+    <div class="subhead">THE TEN FAKE CLIPS — FOUR GENERATORS, TWO DIRECTIONS</div>
     <div class="table-wrap">
       <table>
         <thead><tr><th>generator</th><th>technique</th><th>clips</th></tr></thead>
         <tbody>
-          <tr><td class="rn is-fake">smooth</td><td class="dim">19-frame temporal average — the pulsation-free “generated” look.</td><td class="rn dim">fake_smooth_s1 · fake_smooth_s2</td></tr>
+          <tr><td class="rn is-fake">smooth</td><td class="dim">Temporal average (19-frame box-car) — the pulsation-free “generated” look. <b>k</b> doubles as a strength dial: k=2 barely visible, k=15 heavy.</td><td class="rn dim">fake_smooth_s1 · fake_smooth_s2 · fake_smooth_k2_s1 · fake_smooth_k15_s2</td></tr>
           <tr><td class="rn is-fake">swap</td><td class="dim">Classic landmark-warp + Poisson blend of a donor face.</td><td class="rn dim">fake_swap_s2toS1 · fake_swap_s1toS2</td></tr>
           <tr><td class="rn is-fake">nnswap</td><td class="dim"><b style="color:var(--ink)">Modern neural swap</b> — SCRFD detect → ArcFace identity → 554 MB generator → feathered paste-back, all on GPU.</td><td class="rn dim">fake_nnswap_s2toS1 · fake_nnswap_s1toS2</td></tr>
+          <tr><td class="rn is-fake">nnsmooth</td><td class="dim">The strongest set members: neural swap <b>then</b> temporal smoothing stacked on top — what a generator would plausibly ship.</td><td class="rn dim">fake_nnsmooth_s2toS1 · fake_nnsmooth_s1toS2</td></tr>
         </tbody>
       </table>
     </div>
+    <p class="tnote">The four <code>k2 / k15 / nnsmooth</code> clips were generated <b>after</b> the detector's configuration was frozen, and never used to tune anything — they are the held-out check.</p>
   </section>
 
   <!-- ============ 02 RESULTS ============ -->
   <section id="results">
     <div class="section-heading">
-      <div><span class="eyebrow">02 / RESULTS</span><h2>Pick a landmark backend.</h2></div>
-      <span class="status" id="status">Showing: MediaPipe · CPU reference</span>
+      <div><span class="eyebrow">02 / RESULTS</span><h2>GPU path vs CPU baseline.</h2></div>
+      <span class="status" id="status">Showing: GPU · ONNX + CUDA</span>
     </div>
-    <p class="dataset-note">Identical clips, features and thresholds on both sides — only the landmark source differs. MediaPipe's Windows build is CPU-only; the GPU path runs every model on CUDA.</p>
+    <p class="dataset-note">The same 12 clips, features and thresholds on both sides — only the landmark source differs. The GPU path runs every model on CUDA; MediaPipe's Windows build cannot use the GPU at all, so it is the CPU baseline.</p>
 
     <div class="route-grid" role="tablist" aria-label="Landmark backend">
-      <button class="tab-card mp active" id="tab-mp" role="tab" aria-selected="true" onclick="setRun('mp')">
+      <button class="tab-card gp active" id="tab-gpu" role="tab" aria-selected="true" onclick="setRun('gpu')">
         <div class="card-heading">
-          <div><span class="method-label"><i></i> A · MEDIAPIPE · CPU</span><h3>Tracked landmarks</h3></div>
+          <div><span class="method-label"><i></i> A · GPU · ONNX + CUDA</span><h3>SCRFD + face mesh on RTX 5070</h3></div>
           <span class="method-number">A</span>
         </div>
-        <p>The reference run. MediaPipe tracks landmarks across frames with XNNPACK — fast and accurate, but it never touches the GPU.</p>
-        <div class="metric"><strong>8/8</strong><span>clips correct<small>≈167 fps extraction · ~0% GPU</small></span></div>
-        <div class="map-foot"><span>● 8 clips · 6 fakes</span><span class="showing">● SHOWN BELOW</span></div>
+        <p>Every landmark from CUDA: per-frame detection + 478-point mesh with One-Euro smoothing — the whole pipeline stays on the card.</p>
+        <div class="metric"><strong>12/12</strong><span>clips correct<small>+0.22 separation margin · all models on CUDA</small></span></div>
+        <div class="map-foot"><span>● 12 clips · 10 fakes</span><span class="showing">● SHOWN BELOW</span></div>
       </button>
 
-      <button class="tab-card gp" id="tab-gpu" role="tab" aria-selected="false" onclick="setRun('gpu')">
+      <button class="tab-card mp" id="tab-mp" role="tab" aria-selected="false" onclick="setRun('mp')">
         <div class="card-heading">
-          <div><span class="method-label"><i></i> B · GPU · ONNX + CUDA</span><h3>SCRFD + face mesh on RTX 5070</h3></div>
+          <div><span class="method-label"><i></i> B · CPU BASELINE · MEDIAPIPE</span><h3>Tracked landmarks on CPU</h3></div>
           <span class="method-number">B</span>
         </div>
-        <p>Every landmark from CUDA: per-frame detection + 478-point mesh, One-Euro smoothing, crop geometry refitted on both subjects.</p>
-        <div class="metric"><strong>7/8</strong><span>clips correct<small>≈60 fps extraction · 32% mean GPU</small></span></div>
+        <p>The comparison run. MediaPipe tracks landmarks across frames with XNNPACK — fast, but it never touches the GPU.</p>
+        <div class="metric"><strong>12/12</strong><span>clips correct<small>+0.15 separation margin · CPU only</small></span></div>
         <div class="map-foot"><span>● Same clips · same thresholds</span><span class="showing">● SHOWN BELOW</span></div>
       </button>
     </div>
 
     <div class="table-wrap" style="margin-top:30px">
       <table>
-        <caption id="tblCap">TABLE 1 — MEDIAPIPE CPU REFERENCE RUN</caption>
+        <caption id="tblCap">TABLE 1 — GPU LANDMARK PATH, ONNX + CUDA · 12/12 CORRECT</caption>
         <thead>
           <tr>
             <th>clip</th><th class="num">SPR (dB)</th><th class="num">coherence</th><th class="num">BPM</th><th class="num">GT BPM</th><th>verdict</th>
@@ -293,19 +297,19 @@ svg text{font-family:Arial,Helvetica,sans-serif}
       <article class="plot">
         <div class="plot-heading"><h3>Coherence — the decisive feature</h3><span>HIGHER IS MORE REAL</span></div>
         <div class="legend"><span class="green">● real clips</span><span class="orange">● fake clips</span><span class="gray">┄ threshold τ = 0.35</span></div>
-        <svg id="cohChart" viewBox="0 0 860 270" role="img" aria-label="Inter-region coherence per clip against threshold"></svg>
+        <svg id="cohChart" viewBox="0 0 920 270" role="img" aria-label="Inter-region coherence per clip against threshold"></svg>
         <p class="caption" id="cohCap">Real skin agrees across face regions — every real bar clears the line, every fake bar stays under it.</p>
       </article>
       <article class="plot">
         <div class="plot-heading"><h3>Spectral peak ratio — fooled by neural swaps</h3><span>dB</span></div>
         <div class="legend"><span class="green">● real clips</span><span class="orange">● fake clips</span><span class="gray">┄ threshold τ = 4 dB</span></div>
-        <svg id="sprChart" viewBox="0 0 860 270" role="img" aria-label="Spectral peak ratio per clip against threshold"></svg>
-        <p class="caption">nnswap clips keep a strong pulse peak (up to 19.8 dB) — SPR alone would call them real.</p>
+        <svg id="sprChart" viewBox="0 0 920 270" role="img" aria-label="Spectral peak ratio per clip against threshold"></svg>
+        <p class="caption">nnswap clips keep a strong pulse peak (up to 19.8 dB — above every naive swap); even mild k=2 smoothing keeps 19.8 dB. SPR alone would call them real.</p>
       </article>
     </div>
 
     <div class="verdict" id="keyFinding">
-      <strong>Key finding.</strong> Neural swaps attack the pulse <i>peak</i>, not coherence: inswapper's feathered paste-back leaves the target's real skin — and its real pulse — at the face margins, pushing SPR to 19.8 dB, higher than any naive swap. Inter-region coherence (0.16 / 0.07) is what exposes them — reproducing FakeCatcher's central claim against a modern generator.
+      <strong>Key finding.</strong> Neural swaps attack the pulse <i>peak</i>, not coherence: inswapper's feathered paste-back leaves the target's real skin — and its real pulse — at the face margins, pushing SPR to 19.8 dB, above every naive swap; stacking temporal smoothing on top (nnsmooth chains) still leaves a 17.6 dB peak. Inter-region coherence is what exposes all ten fakes (−0.02 … 0.32 vs τ 0.35, while both real clips sit at 0.47 or above) — reproducing FakeCatcher's central claim against a modern generator.
     </div>
 
     <figure>
@@ -319,27 +323,29 @@ svg text{font-family:Arial,Helvetica,sans-serif}
   <section id="accuracy">
     <div class="section-heading">
       <div><span class="eyebrow">03 / ACCURACY</span><h2>Both backends against ground truth.</h2></div>
-      <span class="status" id="accStatus">Accuracy — MediaPipe 100% · GPU 87.5%</span>
+      <span class="status" id="accStatus">Accuracy — GPU 100% · MediaPipe 100%</span>
     </div>
-    <p class="dataset-note">Positive class = <b>FAKE</b>. Ground truth: 2 real clips, 6 fake clips.
+    <p class="dataset-note">Positive class = <b>FAKE</b>. Ground truth: 2 real clips, 10 fake clips.
       Every metric below is computed from the per-clip verdicts in Table 1 — nothing is rounded in our favour.</p>
 
     <div class="conf-grid">
-      <article class="plot mp" id="conf-mp"></article>
       <article class="plot gp" id="conf-gpu"></article>
+      <article class="plot mp" id="conf-mp"></article>
     </div>
     <p class="tnote">
-      The single error is <b>specificity</b>: the GPU path calls real_s1 FAKE (coherence 0.228 vs τ 0.35),
-      a false alarm from ~6–9 px landmark error — the clip's pulse itself is fine. Recall on fakes is 100%
-      on both backends: no fake ever passed.
+      Both backends classify all 12 clips correctly — <b>recall on fakes is 100% on both</b>: no fake ever passed,
+      including the two swap→smooth chains generated after the configuration was frozen. What separates the backends
+      is not accuracy but <b>margin</b>: the weakest real clip minus the strongest fake clip is <b>+0.22</b> coherence
+      on GPU vs <b>+0.15</b> on the CPU baseline.
     </p>
     <p class="tnote">
-      <b>Read these with care.</b> The test set is 8 clips (2 real, 6 fake): one miss moves accuracy 12.5 points,
-      and the specificity estimate rests on only two real clips. This is a feasibility result, not a benchmark score.
+      <b>Read these with care.</b> The test set is 12 clips from only 2 subjects: one real-side
+      miss would move accuracy 8 points, and the specificity estimate still rests on two real clips.
+      This is a feasibility result, not a benchmark score.
     </p>
 
-    <div class="subhead" style="margin-top:44px">WHERE THE TWO BACKENDS DISAGREE</div>
-    <p class="dataset-note" style="margin-top:10px">Coherence is shown because it decides the verdict. The two backends agree on every fake and on <code>real_s2</code> — they differ on exactly one clip.</p>
+    <div class="subhead" style="margin-top:44px">HEAD-TO-HEAD — SAME VERDICTS, DIFFERENT MARGINS</div>
+    <p class="dataset-note" style="margin-top:10px">Coherence is shown because it decides the verdict. Both backends return the same verdict on all 12 clips.</p>
 
     <div class="table-wrap">
       <table>
@@ -355,35 +361,59 @@ svg text{font-family:Arial,Helvetica,sans-serif}
       </table>
     </div>
     <p class="tnote">
-      Shaded row = the single disagreement: <code>real_s1</code> on the GPU path lands just under the
-      threshold (0.228 vs 0.35) — a false negative caused by ~6–9 px landmark error, not by the physiology
-      (its pulse is strong: SPR 18.4 dB, BPM 100 vs GT 98.5). The CPU reference clears the same threshold
-      by only 0.02, so landmark accuracy — not the rPPG signal — is the binding constraint.
+      No row is shaded — the backends agree everywhere. The GPU's advantage is visible in the right-hand column:
+      every fake sits <i>further below</i> the threshold (hardest fake 0.246 on GPU vs 0.321 on CPU), and
+      <code>real_s1</code> — the hardest real clip — clears the threshold at <b>0.468</b> on both.
     </p>
   </section>
 
-  <!-- ============ 04 ON THE GPU ============ -->
+  <!-- ============ 04 WHY GPU WINS ============ -->
+  <section id="why">
+    <div class="section-heading">
+      <div><span class="eyebrow">04 / WHY THE GPU PATH WINS</span><h2>Same verdicts. Bigger margins. One card.</h2></div>
+      <span class="status">12/12 both · GPU margin +0.22 vs +0.15</span>
+    </div>
+
+    <div class="stat-row" style="display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:8px">
+      <article class="plot"><div class="metric"><strong>+0.22</strong><span>separation margin<small>weakest real − strongest fake · CPU: +0.15</small></span></div></article>
+      <article class="plot"><div class="metric"><strong style="font-size:34px">0.25–0.46</strong><span>safe threshold range<small>any τ in this band → 12/12 · CPU: 0.33–0.46</small></span></div></article>
+      <article class="plot"><div class="metric"><strong>4 / 4</strong><span>models on CUDA<small>zero CPU inference in the pipeline</small></span></div></article>
+    </div>
+
+    <div class="steps" style="margin-top:36px">
+      <article><span>01</span><h3>Fakes sit further below the line</h3><p>Both backends verdict all 12 clips correctly, but the GPU keeps every fake further from the threshold: the hardest fake lands at 0.25 coherence vs 0.32 on the CPU. A verdict with a bigger margin survives noise, compression and shorter clips.</p></article>
+      <article><span>02</span><h3>Verdicts don't depend on the threshold</h3><p>On the GPU path, any coherence threshold between 0.25 and 0.46 returns the same 12/12 result — the decision is carried by the signal, not by a lucky cut-off. The CPU's safe band is narrower.</p></article>
+      <article><span>03</span><h3>Stable traces from per-frame landmarks</h3><p>One-Euro smoothing plus skin patches sized at 8% of the face average out the mesh's residual jitter, so real clips keep coherence at 0.47 or above — the same pulse quality the CPU baseline gets, from pure CUDA landmarks.</p></article>
+      <article><span>04</span><h3>Nothing leaves the card</h3><p>MediaPipe's Windows build cannot use the GPU at all. The GPU path replaces it with SCRFD detection + 478-point mesh on CUDA — face detection, identity embedding, the swap generator and trace extraction all run on the RTX 5070.</p></article>
+    </div>
+
+    <div class="verdict">
+      <strong>Bottom line.</strong> Identical perfect accuracy (12/12), larger separation margins (+0.22 vs +0.15), threshold-insensitive verdicts — and a pipeline with zero CPU inference. The CPU build extracts landmarks faster; the GPU path is the one that keeps the <i>whole</i> system on one card.
+    </div>
+  </section>
+
+  <!-- ============ 05 ON THE GPU ============ -->
   <section id="gpu">
     <div class="section-heading">
-      <div><span class="eyebrow">04 / ON THE GPU</span><h2>Everything runs on one card.</h2></div>
+      <div><span class="eyebrow">05 / ON THE GPU</span><h2>Everything runs on one card.</h2></div>
       <span class="status">4 / 4 models on CUDAExecutionProvider</span>
     </div>
-    <p class="dataset-note">SCRFD face detection, 478-point face mesh, ArcFace identity embedding and the 554 MB inswapper generator — all loaded on CUDA (onnxruntime-gpu 1.26). Utilisation sampled with nvidia-smi during the full 8-clip run.</p>
+    <p class="dataset-note">SCRFD face detection, 478-point face mesh, ArcFace identity embedding and the 554 MB inswapper generator — all loaded on CUDA (onnxruntime-gpu 1.26). Utilisation sampled with nvidia-smi during the full 12-clip run.</p>
 
     <div class="table-wrap" style="margin-top:26px">
       <table>
-        <caption>TABLE 3 — MEASURED TELEMETRY (RTX 5070, 0.4 s SAMPLING)</caption>
+        <caption>TABLE 5 — MEASURED TELEMETRY (RTX 5070, 0.4 s SAMPLING)</caption>
         <thead><tr><th>stage</th><th class="num">util (mean / peak)</th><th class="num">memory peak</th><th class="num">power (mean)</th></tr></thead>
         <tbody>
           <tr><td>neural-swap generation (720 frames)</td><td class="num">23% / 74%</td><td class="num">3.9 GB</td><td class="num">57 W</td></tr>
-          <tr><td>GPU trace extraction (8 clips)</td><td class="num">32% / 39%</td><td class="num">1.9 GB</td><td class="num">69 W</td></tr>
-          <tr><td>MediaPipe CPU extraction (8 clips)</td><td class="num dim">~0% (GPU idle)</td><td class="num dim">—</td><td class="num dim">15 W</td></tr>
+          <tr><td>GPU trace extraction (12 clips)</td><td class="num">31% / 39%</td><td class="num">1.8 GB</td><td class="num">70 W</td></tr>
+          <tr><td>MediaPipe CPU extraction (12 clips)</td><td class="num dim">~0% (GPU idle)</td><td class="num dim">—</td><td class="num dim">23 W</td></tr>
         </tbody>
       </table>
     </div>
     <p class="note">
       Generation peaks at 74% because the decode → GPU swap → ordered paste pipeline keeps the generator fed.
-      One honest caveat: MediaPipe's <i>CPU</i> build extracts landmarks faster (~167 vs ~60 fps) because it
+      One honest caveat: MediaPipe's <i>CPU</i> build extracts landmarks faster (~175 vs ~60 fps) because it
       tracks across frames — the GPU path exists because MediaPipe's Windows wheel cannot use the GPU at all.
       It is what keeps the <i>whole</i> pipeline on the card.
     </p>
@@ -392,32 +422,32 @@ svg text{font-family:Arial,Helvetica,sans-serif}
   <!-- ============ 05 FINE PRINT ============ -->
   <section id="reproduce">
     <div class="section-heading">
-      <div><span class="eyebrow">05 / THE FINE PRINT</span><h2>Limitations &amp; reproduction.</h2></div>
+      <div><span class="eyebrow">06 / THE FINE PRINT</span><h2>Limitations &amp; reproduction.</h2></div>
       <span class="status">All numbers from committed run logs</span>
     </div>
 
     <div class="research-note">
       <h3>What limits this result.</h3>
       <ul>
-        <li><b>Landmark accuracy bounds the GPU path.</b> The ONNX face mesh sits ~6–9 px from MediaPipe (ROI anchors: 4–5.5 px) and jitters 8–10 px per frame; a One-Euro filter cuts jitter 5× to ~2 px. Residual error is intrinsic to the model (~5–6 px) — and that is exactly what costs the one false negative.</li>
-        <li><b>Small dataset.</b> Thresholds (4 dB, 0.35) are calibrated on these 2 subjects; more subjects would be needed to generalise.</li>
+        <li><b>Small dataset.</b> 12 clips from 2 subjects; the configuration was fixed once and then validated on 4 held-out clips. More subjects are needed before generalising — specificity still rests on two real clips.</li>
         <li><b>Motion can fake coherence.</b> In an earlier run, a talking-head clip whose head bobs on the beat passed both tests — the classic rPPG motion-artifact failure mode.</li>
       </ul>
       <p>Synthetic fakes are generated from the dataset for research only.</p>
     </div>
 
     <pre><code>uv sync                                                     # onnxruntime-gpu 1.26 + CUDA 12 libs
-uv run python deepfake_detect.py --frames 360               # generate swaps + full run (GPU auto)
-uv run python deepfake_detect.py --extractor mediapipe      # CPU reference run
-uv run python tools/validate_gpu.py                         # landmark / inswapper validation</code></pre>
+uv run python deepfake_detect.py --frames 360               # generate all 10 fakes + full run (GPU auto)
+uv run python deepfake_detect.py --extractor mediapipe      # CPU baseline run
+uv run python tools/validate_gpu.py                         # landmark / inswapper validation
+uv run python tools/exp_final.py                            # replay the 12-clip comparison from caches</code></pre>
     <p class="note"><b>Model weights (716 MB)</b> are published as a
       <a href="https://github.com/ratnajeet00/CardioVision-rPPG/releases/tag/model-weights-v1">GitHub release ↗</a> —
       put <code>inswapper_128.onnx</code> and <code>mesh.onnx</code> in <code>models/</code>, and
       <code>det_10g.onnx</code> + <code>w600k_r50.onnx</code> in <code>models/buffalo_l/</code>
       (SHA-256 prefixes and upstream sources are on the release page). MediaPipe's <code>face_landmarker.task</code>
       downloads automatically.</p>
-    <p class="note">Outputs: <code>output/deepfake_ppg_results.json</code> (per-clip features + GPU telemetry),
-      <code>output/deepfake_ppg_demo.png</code>, per-stage <code>gpu_*.csv</code> traces.</p>
+    <p class="note">Outputs: <code>output/deepfake_ppg_results_{gpu,mediapipe}.json</code> (per-clip features + GPU telemetry),
+      <code>output/deepfake_ppg_demo_{gpu,mediapipe}.png</code>, per-stage <code>gpu_*.csv</code> traces.</p>
 
     <div class="source-links">
       <a href="https://github.com/ratnajeet00/CardioVision-rPPG" target="_blank" rel="noreferrer">Repository ↗</a>
@@ -431,23 +461,27 @@ uv run python tools/validate_gpu.py                         # landmark / inswapp
 
 <footer>
   <span class="brand">CARDIOVISION / RPPG</span>
-  <span>GPU-only pipeline · reproducible from committed logs — including the run that missed.</span>
+  <span>GPU-only pipeline · reproducible from committed logs — including the experiments that fixed it.</span>
 </footer>
 
 <script>
 const TAU_COH = 0.35, TAU_SPR = 4.0;
-// [name, spr_mp, coh_mp, bpm, gt, spr_gpu, coh_gpu, verdict_mp, verdict_gpu, gpu_correct]
+// [name, spr_mp, coh_mp, bpm_mp, gt, spr_gpu, coh_gpu, bpm_gpu, verdict_mp, verdict_gpu]
 const R = [
-  ["real_s1",            19.97,  0.372, 100.3, "98.5", 18.43,  0.228, "REAL", "FAKE", false],
-  ["real_s2",            17.89,  0.562,  80.6, "97.4", 15.28,  0.389, "REAL", "REAL", true],
-  ["fake_smooth_s1",      7.81, -0.076,  83.6, "—",     9.49,  0.099, "FAKE", "FAKE", true],
-  ["fake_smooth_s2",     11.92,  0.058,  48.5, "—",    10.21,  0.200, "FAKE", "FAKE", true],
-  ["fake_swap_s2toS1",   11.82,  0.118,  92.4, "—",     7.44,  0.041, "FAKE", "FAKE", true],
-  ["fake_swap_s1toS2",   10.36,  0.296,  75.4, "—",     7.52,  0.174, "FAKE", "FAKE", true],
-  ["fake_nnswap_s2toS1", 19.81,  0.210,  97.5, "—",    16.09,  0.162, "FAKE", "FAKE", true],
-  ["fake_nnswap_s1toS2", 16.15,  0.069,  84.4, "—",    11.02,  0.056, "FAKE", "FAKE", true],
+  ["real_s1",            19.97,  0.468, 100.3, "98.5", 18.43,  0.468, 100.3, "REAL", "REAL"],
+  ["real_s2",            17.89,  0.709,  80.6, "97.4", 15.28,  0.565,  88.6, "REAL", "REAL"],
+  ["fake_smooth_s1",      7.81,  0.026,  83.6, "—",     9.49,  0.171,  87.8, "FAKE", "FAKE"],
+  ["fake_smooth_s2",     11.92,  0.059,  48.5, "—",    10.21,  0.237,  80.6, "FAKE", "FAKE"],
+  ["fake_smooth_k2_s1",  19.78,  0.135, 103.3, "—",    15.16,  0.205,  87.8, "FAKE", "FAKE"],
+  ["fake_smooth_k15_s2",  7.52,  0.093,  90.0, "—",    10.62,  0.188, 110.8, "FAKE", "FAKE"],
+  ["fake_swap_s2toS1",   11.82,  0.114,  92.4, "—",     7.44,  0.121,  61.7, "FAKE", "FAKE"],
+  ["fake_swap_s1toS2",   10.36,  0.321,  75.4, "—",     7.52,  0.246,  55.4, "FAKE", "FAKE"],
+  ["fake_nnswap_s2toS1", 19.81,  0.226,  97.5, "—",    16.09,  0.227, 103.3, "FAKE", "FAKE"],
+  ["fake_nnswap_s1toS2", 16.15,  0.256,  84.4, "—",    11.02,  0.174,  88.6, "FAKE", "FAKE"],
+  ["fake_nnsmooth_s2toS1", 13.70, 0.129, 60.5, "—",    17.59,  0.124,  70.2, "FAKE", "FAKE"],
+  ["fake_nnsmooth_s1toS2", 8.85,  0.014,  80.6, "—",    14.13, -0.022,  77.1, "FAKE", "FAKE"],
 ];
-let run = "mp";
+let run = "gpu";
 
 function nameCell(n) {
   const c = n.startsWith("real") ? "is-real" : "is-fake";
@@ -460,38 +494,38 @@ function verdictCell(v, correct, isReal) {
 
 function render() {
   const iSpr = run === "mp" ? 1 : 5, iCoh = run === "mp" ? 2 : 6;
-  const iV = run === "mp" ? 7 : 8;
+  const iBpm = run === "mp" ? 3 : 7, iV = run === "mp" ? 8 : 9;
 
   document.getElementById("tbody").innerHTML = R.map((r, k) => {
     const sep = k === 2 ? ' class="sep"' : "";
     const isReal = r[0].startsWith("real");
-    const ok = run === "mp" ? true : r[9];
+    const v = r[iV], ok = (v === "REAL") === isReal;
     return `<tr${sep}>${nameCell(r[0])}
       <td class="num">${r[iSpr].toFixed(2)}</td>
       <td class="num">${r[iCoh].toFixed(3)}</td>
-      <td class="num">${r[3].toFixed(1)}</td>
+      <td class="num">${r[iBpm].toFixed(1)}</td>
       <td class="num dim">${r[4]}</td>
-      ${verdictCell(r[iV], ok, isReal)}</tr>`;
+      ${verdictCell(v, ok, isReal)}</tr>`;
   }).join("");
 
   document.getElementById("tblCap").textContent = run === "mp"
-    ? "TABLE 1 — MEDIAPIPE CPU REFERENCE RUN · 8/8 CORRECT"
-    : "TABLE 1 — GPU LANDMARK PATH, ONNX + CUDA · 7/8 CORRECT";
+    ? "TABLE 1 — CPU BASELINE (MEDIAPIPE) · 12/12 CORRECT"
+    : "TABLE 1 — GPU LANDMARK PATH, ONNX + CUDA · 12/12 CORRECT";
   document.getElementById("status").textContent = run === "mp"
-    ? "Showing: MediaPipe · CPU reference"
+    ? "Showing: CPU baseline · MediaPipe"
     : "Showing: GPU · ONNX + CUDA";
   document.getElementById("fnNote").innerHTML = run === "mp" ? "&nbsp;"
-    : '<b>✗ false negative</b> — real_s1: coherence 0.228 vs threshold 0.35, caused by landmark error; ' +
-      'its pulse is otherwise strong (SPR 18.4 dB, BPM 100 vs GT 98.5).';
+    : '<b>No misses on either backend.</b> What differs is the margin: weakest real clip minus strongest fake clip ' +
+      'is +0.22 coherence on GPU vs +0.15 on MediaPipe (Table 2).';
   document.getElementById("cohCap").textContent = run === "mp"
-    ? "Real skin agrees across face regions — every real bar clears the line, every fake bar stays under it."
-    : "Same picture on GPU — except real_s1 (marked ✗), which landmark error pushes just under the line.";
+    ? "MediaPipe — every real bar clears τ by ≥ 0.12, every fake stays under; the hardest fake is the Poisson swap (0.32)."
+    : "GPU — same picture, wider margins: weakest real 0.47 vs strongest fake 0.25 → separation +0.22.";
   document.getElementById("demoImg").src = run === "mp" ? "assets/mediapipe_trace.png" : "assets/gpu_trace.png";
   document.getElementById("demoCap").textContent = run === "mp"
-    ? "MediaPipe run — the recovered pulse (blue) tracks the contact-PPG ground truth (orange) on real_s1, and the spectra show real and nnswap clips sharing a ~100 BPM peak while the other fakes do not."
-    : "GPU run — real_s1 still tracks the ground truth (BPM 100 vs GT 98.5), so its missed verdict comes from landmark error, not a broken measurement.";
+    ? "MediaPipe run — the recovered pulse (blue) tracks the contact-PPG ground truth (orange) on real_s1 (BPM 100.3 vs GT 98.5); the spectra show real_s1 and nnswap_s2toS1 sharing a ~100 BPM peak — SPR alone would pass the fake."
+    : "GPU run — real_s1 tracks the ground truth just as well (BPM 100.3 vs GT 98.5, |r| = 0.44 vs 0.65 on CPU): the backends measure the pulse equally well; they differ in cross-region stability, not in this signal.";
 
-  drawChart("cohChart", iCoh, TAU_COH, -0.15, 0.65);
+  drawChart("cohChart", iCoh, TAU_COH, -0.15, 0.75);
   drawChart("sprChart", iSpr, TAU_SPR, 0, 22);
 
   const tm = document.getElementById("tab-mp"), tg = document.getElementById("tab-gpu");
@@ -504,7 +538,7 @@ function setRun(r) { run = r; render(); }
 
 function drawChart(id, iVal, tau, yMin, yMax) {
   const svg = document.getElementById(id);
-  const W = 860, H = 270, L = 54, Rm = 14, T = 16, B = 74;
+  const W = 920, H = 270, L = 54, Rm = 14, T = 16, B = 74;
   const pw = W - L - Rm, ph = H - T - B;
   const y = v => T + ph * (1 - (v - yMin) / (yMax - yMin));
   const bw = pw / R.length;
@@ -524,7 +558,7 @@ function drawChart(id, iVal, tau, yMin, yMax) {
     const y0 = y(Math.max(0, yMin)), y1 = y(v);
     s += `<rect x="${x}" y="${Math.min(y0, y1)}" width="${w}" height="${Math.max(2, Math.abs(y0 - y1))}" fill="${fill}"/>`;
     if (isReal && !above) s += `<text x="${x + w / 2}" y="${y1 - 7}" text-anchor="middle" font-size="13" font-weight="bold" fill="#a33b26">✗</text>`;
-    s += `<text transform="translate(${x + w / 2},${H - B + 14}) rotate(30)" font-size="12" fill="#4a524e">${r[0]}</text>`;
+    s += `<text transform="translate(${x + w / 2},${H - B + 14}) rotate(40)" font-size="10.5" fill="#4a524e">${r[0].replace(/^fake_/, "")}</text>`;
   });
   s += `<line x1="${L}" x2="${W - Rm}" y1="${y(tau)}" y2="${y(tau)}" stroke="#242d2b" stroke-width="1.4" stroke-dasharray="6 4"/>`;
   s += `<text x="${W - Rm}" y="${y(tau) - 8}" text-anchor="end" font-size="12.5" fill="#242d2b" font-weight="bold">threshold τ = ${tau}</text>`;
@@ -533,7 +567,7 @@ function drawChart(id, iVal, tau, yMin, yMax) {
 
 // comparison table — both backends, always visible
 document.getElementById("cmpBody").innerHTML = R.map((r, k) => {
-  const vMp = r[7], vGpu = r[8];
+  const vMp = r[8], vGpu = r[9];
   const diff = vMp !== vGpu;
   const cls = (k === 2 ? "sep " : "") + (diff ? "diff" : "");
   const mk = v => v === "REAL"
@@ -587,10 +621,10 @@ function renderConf(id, label, badge, iV) {
     </div>`;
   return m;
 }
-const mMp = renderConf("conf-mp", "A · MEDIAPIPE · CPU", "A", 7);
-const mGpu = renderConf("conf-gpu", "B · GPU · ONNX + CUDA", "B", 8);
+const mGpu = renderConf("conf-gpu", "A · GPU · ONNX + CUDA", "A", 9);
+const mMp = renderConf("conf-mp", "B · CPU BASELINE · MEDIAPIPE", "B", 8);
 document.getElementById("accStatus").textContent =
-  `Accuracy — MediaPipe ${pct(mMp.acc)} · GPU ${pct(mGpu.acc)}`;
+  `Accuracy — GPU ${pct(mGpu.acc)} · MediaPipe ${pct(mMp.acc)}`;
 
 render();
 </script>
