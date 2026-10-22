@@ -114,6 +114,28 @@ tr.sep td{border-bottom:1px solid var(--ink)}
 .legend .orange{color:var(--orange)}
 .legend .gray{color:#838b85}
 .plot .caption{margin:8px 0 0}
+.plot .caption b{color:var(--ink)}
+
+/* ---------- visual-check figures ---------- */
+.figure-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:14px;align-items:start}
+.plot.fig{padding:14px}
+.plot.fig img{width:100%;display:block;border:1px solid var(--line);border-radius:6px;background:#fff}
+.plot.fig .caption{margin-top:10px}
+
+/* ---------- confusion matrix + metrics ---------- */
+.conf-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:26px}
+.conf-body{display:flex;gap:26px;flex-wrap:wrap;align-items:flex-start;margin-top:16px}
+table.conf{width:auto;border-collapse:collapse;font:13px Helvetica,Arial,sans-serif}
+table.conf th{font-size:10px;letter-spacing:.5px;color:var(--muted);background:none;border:none;padding:6px 8px;text-align:center;font-weight:500}
+table.conf th.rowlab{text-align:left;font-weight:600;color:var(--ink);white-space:nowrap}
+table.conf td{width:78px;height:54px;text-align:center;font-size:24px;font-weight:500;border:1px solid var(--line);border-radius:5px;background:var(--white);font-variant-numeric:tabular-nums}
+table.conf td.ok{background:#e9eee7;color:var(--green);border-color:#ccd7cb}
+table.conf td.err{background:#f7ece4;color:#a33b26;border-color:#e6d0c1}
+.mlist{flex:1 1 185px;min-width:175px}
+.mrow{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--line);font-size:12.5px;align-items:baseline}
+.mrow span{color:var(--muted)}
+.mrow b{font-variant-numeric:tabular-nums;white-space:nowrap}
+.mrow:last-child{border-bottom:none}
 
 /* ---------- stats ---------- */
 .benchmark-summary{display:flex;gap:38px;margin:30px 0 6px;flex-wrap:wrap}
@@ -141,7 +163,7 @@ svg text{font-family:Arial,Helvetica,sans-serif}
   .site-header{height:72px}nav{gap:15px;font-size:11px}.brand{font-size:10px;letter-spacing:1px}
   .intro{padding:45px 0 36px}h1{letter-spacing:-2px}.intro p{font-size:16px}
   .intro-meta{gap:12px;font-size:9px}.intro-meta span+span:before{margin-right:12px}
-  .route-grid,.chart-grid{grid-template-columns:1fr}
+  .route-grid,.chart-grid,.figure-grid,.conf-grid{grid-template-columns:1fr}
   .steps{grid-template-columns:1fr;gap:18px}.steps p{max-width:none}
   h2{font-size:24px}.section-heading{align-items:flex-start;flex-wrap:wrap}.status{font-size:10px}
   .benchmark-summary{gap:15px}.stat{padding-left:12px}.stat strong{font-size:24px}.stat span{font-size:10px}
@@ -160,9 +182,9 @@ svg text{font-family:Arial,Helvetica,sans-serif}
     CARDIOVISION / RPPG
   </a>
   <nav>
-    <a href="#experiment">Pipeline</a>
+    <a href="#experiment">How it was tested</a>
     <a href="#results">Results</a>
-    <a href="#compare">Head-to-head</a>
+    <a href="#accuracy">Accuracy</a>
     <a href="#gpu">On the GPU</a>
     <a href="#reproduce">Reproduce ↗</a>
   </nav>
@@ -178,14 +200,13 @@ svg text{font-family:Arial,Helvetica,sans-serif}
       <span>UBFC-RPPG · 2 SUBJECTS</span>
       <span>8 CLIPS × 360 FRAMES</span>
       <span>INSWAPPER-128 ON RTX 5070</span>
-      <span>8/8 · 7/8 CORRECT</span>
     </div>
   </section>
 
-  <!-- ============ 01 PIPELINE ============ -->
+  <!-- ============ 01 HOW IT WAS TESTED ============ -->
   <section id="experiment">
     <div class="section-heading">
-      <div><span class="eyebrow">01 / THE PIPELINE</span><h2>Every clip gets the same four steps.</h2></div>
+      <div><span class="eyebrow">01 / HOW IT WAS TESTED</span><h2>Four steps, two visual checks.</h2></div>
       <span class="status">Same clips · same features · same thresholds</span>
     </div>
 
@@ -194,6 +215,22 @@ svg text{font-family:Arial,Helvetica,sans-serif}
       <article><span>02</span><h3>POS pulse</h3><p>The Plane-Orthogonal-to-Skin algorithm turns each colour trace into a pulse signal.</p></article>
       <article><span>03</span><h3>Two features</h3><p><b>SPR</b> — strength of the heart-rate spectral peak in dB. <b>Coherence</b> — do all regions show the <i>same</i> pulse?</p></article>
       <article><span>04</span><h3>Verdict</h3><p>REAL iff SPR ≥ 4 dB <i>and</i> coherence ≥ 0.35 <i>and</i> BPM is physiological (45–140).</p></article>
+    </div>
+
+    <div class="subhead">THE VISUAL CHECKS BEHIND THE NUMBERS</div>
+    <div class="figure-grid">
+      <article class="plot fig">
+        <img src="assets/landmarks_overlay.png" alt="478 landmarks from MediaPipe (green) and the GPU mesh (red) overlaid on one frame">
+        <p class="caption"><b>Landmarks, frame 50.</b> 478 points from both backends overlaid — green MediaPipe, red GPU mesh,
+          all 478/478 detected. Point-by-point comparison of every frame gave the 6–9 px residual (4–5.5 px at ROI anchors)
+          that bounds the GPU path's accuracy.</p>
+      </article>
+      <article class="plot fig">
+        <img src="assets/swap_variants.png" alt="target aligned face and four neural-swap scaling variants, only one of which pastes correctly">
+        <p class="caption"><b>Neural-swap calibration.</b> The aligned target face (left) and four input/output scaling variants
+          of inswapper_128 on the same frame — only the correctly-ranged variant (C, 0–1 in / 0–1 out) pastes cleanly.
+          This check from <code>tools/validate_gpu.py</code> produced every nnswap clip.</p>
+      </article>
     </div>
 
     <div class="subhead">THE SIX FAKE CLIPS — THREE GENERATORS, TWO DIRECTIONS</div>
@@ -272,18 +309,37 @@ svg text{font-family:Arial,Helvetica,sans-serif}
     </div>
 
     <figure>
-      <img id="demoImg" src="assets/mediapipe_demo.png" alt="analysis overview: rPPG trace vs ground truth, spectra, and features against thresholds">
-      <figcaption id="demoCap">MediaPipe run — recovered rPPG vs contact-PPG ground truth, heart-rate-band spectra, and both features against their thresholds.</figcaption>
+      <img id="demoImg" src="assets/mediapipe_trace.png" alt="recovered rPPG pulse compared with contact-PPG ground truth, and pulse spectra">
+      <figcaption id="demoCap">MediaPipe run — the recovered pulse (blue) tracks the contact-PPG ground truth (orange) on real_s1,
+        and the spectra show real and nnswap clips sharing a ~100 BPM peak while the other fakes do not.</figcaption>
     </figure>
   </section>
 
-  <!-- ============ 03 HEAD-TO-HEAD ============ -->
-  <section id="compare">
+  <!-- ============ 03 ACCURACY ============ -->
+  <section id="accuracy">
     <div class="section-heading">
-      <div><span class="eyebrow">03 / HEAD-TO-HEAD</span><h2>Same clips, two landmark sources.</h2></div>
-      <span class="status">Agreement: 7 / 8 clips · all 6 fakes</span>
+      <div><span class="eyebrow">03 / ACCURACY</span><h2>Both backends against ground truth.</h2></div>
+      <span class="status" id="accStatus">Accuracy — MediaPipe 100% · GPU 87.5%</span>
     </div>
-    <p class="dataset-note">Coherence is shown because it decides the verdict. The two backends agree on every fake and on <code>real_s2</code> — they differ on exactly one clip.</p>
+    <p class="dataset-note">Positive class = <b>FAKE</b>. Ground truth: 2 real clips, 6 fake clips.
+      Every metric below is computed from the per-clip verdicts in Table 1 — nothing is rounded in our favour.</p>
+
+    <div class="conf-grid">
+      <article class="plot mp" id="conf-mp"></article>
+      <article class="plot gp" id="conf-gpu"></article>
+    </div>
+    <p class="tnote">
+      The single error is <b>specificity</b>: the GPU path calls real_s1 FAKE (coherence 0.228 vs τ 0.35),
+      a false alarm from ~6–9 px landmark error — the clip's pulse itself is fine. Recall on fakes is 100%
+      on both backends: no fake ever passed.
+    </p>
+    <p class="tnote">
+      <b>Read these with care.</b> The test set is 8 clips (2 real, 6 fake): one miss moves accuracy 12.5 points,
+      and the specificity estimate rests on only two real clips. This is a feasibility result, not a benchmark score.
+    </p>
+
+    <div class="subhead" style="margin-top:44px">WHERE THE TWO BACKENDS DISAGREE</div>
+    <p class="dataset-note" style="margin-top:10px">Coherence is shown because it decides the verdict. The two backends agree on every fake and on <code>real_s2</code> — they differ on exactly one clip.</p>
 
     <div class="table-wrap">
       <table>
@@ -314,21 +370,14 @@ svg text{font-family:Arial,Helvetica,sans-serif}
     </div>
     <p class="dataset-note">SCRFD face detection, 478-point face mesh, ArcFace identity embedding and the 554 MB inswapper generator — all loaded on CUDA (onnxruntime-gpu 1.26). Utilisation sampled with nvidia-smi during the full 8-clip run.</p>
 
-    <div class="benchmark-summary">
-      <div class="stat o"><strong>23% / 74%</strong><span>swap generation — mean / peak utilisation</span></div>
-      <div class="stat g"><strong>32% / 39%</strong><span>GPU trace extraction — mean / peak</span></div>
-      <div class="stat"><strong>3.9 GB</strong><span>peak memory during generation</span></div>
-      <div class="stat"><strong>360/360</strong><span>neural swaps per clip, all on CUDA</span></div>
-    </div>
-
-    <div class="table-wrap">
+    <div class="table-wrap" style="margin-top:26px">
       <table>
         <caption>TABLE 3 — MEASURED TELEMETRY (RTX 5070, 0.4 s SAMPLING)</caption>
-        <thead><tr><th>stage</th><th class="num">util (mean / peak)</th><th class="num">memory peak</th><th class="num">power (mean)</th><th class="num">throughput</th></tr></thead>
+        <thead><tr><th>stage</th><th class="num">util (mean / peak)</th><th class="num">memory peak</th><th class="num">power (mean)</th></tr></thead>
         <tbody>
-          <tr><td>neural-swap generation (2 × 360 frames)</td><td class="num">23% / 74%</td><td class="num">3.9 GB</td><td class="num">57 W</td><td class="num">3-stage pipeline</td></tr>
-          <tr><td>GPU trace extraction (8 clips)</td><td class="num">32% / 39%</td><td class="num">1.9 GB</td><td class="num">69 W</td><td class="num">≈60 fps</td></tr>
-          <tr><td>MediaPipe CPU extraction (8 clips)</td><td class="num dim">~0% (GPU idle)</td><td class="num dim">—</td><td class="num dim">15 W</td><td class="num dim">≈167 fps</td></tr>
+          <tr><td>neural-swap generation (720 frames)</td><td class="num">23% / 74%</td><td class="num">3.9 GB</td><td class="num">57 W</td></tr>
+          <tr><td>GPU trace extraction (8 clips)</td><td class="num">32% / 39%</td><td class="num">1.9 GB</td><td class="num">69 W</td></tr>
+          <tr><td>MediaPipe CPU extraction (8 clips)</td><td class="num dim">~0% (GPU idle)</td><td class="num dim">—</td><td class="num dim">15 W</td></tr>
         </tbody>
       </table>
     </div>
@@ -361,11 +410,18 @@ svg text{font-family:Arial,Helvetica,sans-serif}
 uv run python deepfake_detect.py --frames 360               # generate swaps + full run (GPU auto)
 uv run python deepfake_detect.py --extractor mediapipe      # CPU reference run
 uv run python tools/validate_gpu.py                         # landmark / inswapper validation</code></pre>
+    <p class="note"><b>Model weights (716 MB)</b> are published as a
+      <a href="https://github.com/ratnajeet00/CardioVision-rPPG/releases/tag/model-weights-v1">GitHub release ↗</a> —
+      put <code>inswapper_128.onnx</code> and <code>mesh.onnx</code> in <code>models/</code>, and
+      <code>det_10g.onnx</code> + <code>w600k_r50.onnx</code> in <code>models/buffalo_l/</code>
+      (SHA-256 prefixes and upstream sources are on the release page). MediaPipe's <code>face_landmarker.task</code>
+      downloads automatically.</p>
     <p class="note">Outputs: <code>output/deepfake_ppg_results.json</code> (per-clip features + GPU telemetry),
       <code>output/deepfake_ppg_demo.png</code>, per-stage <code>gpu_*.csv</code> traces.</p>
 
     <div class="source-links">
-      <a href="https://github.com/" target="_blank" rel="noreferrer">Repository ↗</a>
+      <a href="https://github.com/ratnajeet00/CardioVision-rPPG" target="_blank" rel="noreferrer">Repository ↗</a>
+      <a href="https://github.com/ratnajeet00/CardioVision-rPPG/releases/tag/model-weights-v1" target="_blank" rel="noreferrer">Model weights ↗</a>
       <a href="https://paperswithcode.com/dataset/ubfc-rppg" target="_blank" rel="noreferrer">UBFC-rPPG dataset ↗</a>
       <a href="https://github.com/deepinsight/insightface" target="_blank" rel="noreferrer">InsightFace inswapper ↗</a>
     </div>
@@ -430,10 +486,10 @@ function render() {
   document.getElementById("cohCap").textContent = run === "mp"
     ? "Real skin agrees across face regions — every real bar clears the line, every fake bar stays under it."
     : "Same picture on GPU — except real_s1 (marked ✗), which landmark error pushes just under the line.";
-  document.getElementById("demoImg").src = run === "mp" ? "assets/mediapipe_demo.png" : "assets/gpu_demo.png";
+  document.getElementById("demoImg").src = run === "mp" ? "assets/mediapipe_trace.png" : "assets/gpu_trace.png";
   document.getElementById("demoCap").textContent = run === "mp"
-    ? "MediaPipe run — recovered rPPG vs contact-PPG ground truth, heart-rate-band spectra, and both features against their thresholds."
-    : "GPU run — the same figure from the CUDA landmark path; note real_s1's coherence bar just under the line.";
+    ? "MediaPipe run — the recovered pulse (blue) tracks the contact-PPG ground truth (orange) on real_s1, and the spectra show real and nnswap clips sharing a ~100 BPM peak while the other fakes do not."
+    : "GPU run — real_s1 still tracks the ground truth (BPM 100 vs GT 98.5), so its missed verdict comes from landmark error, not a broken measurement.";
 
   drawChart("cohChart", iCoh, TAU_COH, -0.15, 0.65);
   drawChart("sprChart", iSpr, TAU_SPR, 0, 22);
@@ -488,6 +544,53 @@ document.getElementById("cmpBody").innerHTML = R.map((r, k) => {
     <td class="num">${r[6].toFixed(3)}</td>
     <td>${diff ? `<span class="v-miss">${vGpu} ✗</span>` : mk(vGpu)}</td></tr>`;
 }).join("");
+
+// accuracy — confusion matrices + metrics, computed from the Table 1 verdicts (positive class = FAKE)
+function accMetrics(iV) {
+  let tp = 0, fp = 0, fn = 0, tn = 0;
+  R.forEach(r => {
+    const actualFake = r[0].startsWith("fake"), predFake = r[iV] === "FAKE";
+    if (actualFake) { predFake ? tp++ : fn++; } else { predFake ? fp++ : tn++; }
+  });
+  const n = tp + fp + fn + tn;
+  const div = (a, b) => b ? a / b : 0;
+  const acc = div(tp + tn, n), prec = div(tp, tp + fp), rec = div(tp, tp + fn), spec = div(tn, tn + fp);
+  const f1 = (prec + rec) ? div(2 * prec * rec, prec + rec) : 0;
+  return { tp, fp, fn, tn, n, acc, prec, rec, spec, f1 };
+}
+const pct = v => { const p = v * 100; return (Math.abs(p - Math.round(p)) < 0.05 ? Math.round(p) : p.toFixed(1)) + "%"; };
+
+function renderConf(id, label, badge, iV) {
+  const m = accMetrics(iV);
+  const cell = (v, ok) => `<td class="${ok ? "ok" : "err"}">${v}</td>`;
+  document.getElementById(id).innerHTML = `
+    <div class="card-heading">
+      <div><span class="method-label"><i></i> ${label}</span><h3>Confusion matrix</h3></div>
+      <span class="method-number">${badge}</span>
+    </div>
+    <div class="metric"><strong>${pct(m.acc)}</strong><span>accuracy · ${m.tp + m.tn} of ${m.n} clips correct<small>positive class = FAKE</small></span></div>
+    <div class="conf-body">
+      <table class="conf">
+        <thead><tr><th></th><th>pred. REAL</th><th>pred. FAKE</th></tr></thead>
+        <tbody>
+          <tr><th class="rowlab">actual REAL</th>${cell(m.tn, m.tn > 0)}${cell(m.fp, m.fp === 0)}</tr>
+          <tr><th class="rowlab">actual FAKE</th>${cell(m.fn, m.fn === 0)}${cell(m.tp, m.tp > 0)}</tr>
+        </tbody>
+      </table>
+      <div class="mlist">
+        <div class="mrow"><span>Accuracy</span><b>${pct(m.acc)} · ${m.tp + m.tn}/${m.n}</b></div>
+        <div class="mrow"><span>Precision · FAKE</span><b>${pct(m.prec)} · ${m.tp}/${m.tp + m.fp}</b></div>
+        <div class="mrow"><span>Recall · FAKE</span><b>${pct(m.rec)} · ${m.tp}/${m.tp + m.fn}</b></div>
+        <div class="mrow"><span>F1 · FAKE</span><b>${pct(m.f1)}</b></div>
+        <div class="mrow"><span>Specificity · REAL</span><b>${pct(m.spec)} · ${m.tn}/${m.tn + m.fp}</b></div>
+      </div>
+    </div>`;
+  return m;
+}
+const mMp = renderConf("conf-mp", "A · MEDIAPIPE · CPU", "A", 7);
+const mGpu = renderConf("conf-gpu", "B · GPU · ONNX + CUDA", "B", 8);
+document.getElementById("accStatus").textContent =
+  `Accuracy — MediaPipe ${pct(mMp.acc)} · GPU ${pct(mGpu.acc)}`;
 
 render();
 </script>

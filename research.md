@@ -10,7 +10,9 @@ python main.py --source 1 --window 8        # camera 1, 8s window
 
 Displays face ROI with BPM overlay.
 
-**Results website:** open `docs/index.html` in a browser — interactive tables, charts, and the GPU/landmark calibration story.
+**Results website:** open `docs/index.html` in a browser — tabbed results for both
+backends, confusion matrices with precision/recall/F1, the visual checks (landmark
+overlay, swap calibration), and the GPU/landmark calibration story.
 
 ---
 
@@ -107,6 +109,21 @@ the 2 UBFC-rPPG subjects in `Dataset/` (real videos + contact-PPG ground truth):
 ⚠ = false negative: real_s1's coherence 0.228 falls below τ=0.35 (the reference
 backend clears it by only 0.02). Landmark accuracy — not the physiology — is the
 binding constraint on the GPU path; see the calibration section below.
+
+### Accuracy summary (positive class = FAKE)
+
+| metric            | MediaPipe CPU | GPU ONNX + CUDA |
+|-------------------|--------------:|----------------:|
+| Accuracy          |    100% (8/8) |    87.5% (7/8)  |
+| Precision (FAKE)  |    100% (6/6) |    85.7% (6/7)  |
+| Recall (FAKE)     |    100% (6/6) |    100% (6/6)   |
+| F1 (FAKE)         |    100%       |    92.3%        |
+| Specificity (REAL)|    100% (2/2) |    50% (1/2)    |
+
+Confusion matrices: MediaPipe TP=6 / FP=0 / FN=0 / TN=2; GPU
+TP=6 / FP=1 / FN=0 / TN=1 (the FP is real_s1). Caveat: the test set is only
+8 clips (2 real / 6 fake) — one miss moves accuracy 12.5 points and specificity
+rests on two clips, so this is a feasibility result, not a benchmark score.
 
 Observations:
 
@@ -225,3 +242,10 @@ uv run python make_deepfakes.py                      # neural-swap clips only
 uv run python tools/validate_gpu.py                  # landmark/inswapper validation
 uv run python deepfake_detect.py --ai-glob "tmp/ai/*.mp4"   # include downloaded AI clips
 ```
+
+**Model weights (716 MB):** published as the
+[`model-weights-v1`](https://github.com/ratnajeet00/CardioVision-rPPG/releases/tag/model-weights-v1)
+GitHub release — `inswapper_128.onnx` and `mesh.onnx` go into `models/`,
+`det_10g.onnx` and `w600k_r50.onnx` into `models/buffalo_l/` (SHA-256 prefixes
+and upstream sources are listed on the release page). MediaPipe's
+`face_landmarker.task` downloads itself on first run.
