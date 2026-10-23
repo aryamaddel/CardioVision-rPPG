@@ -7,3 +7,8 @@ vid.avi
 ground_truth.txt
 tmp/
 .rppg_cache/
+models/*
+!models/README.md
+tmp_testframe.png
+UBFC/
+UBFC_FACES/
